@@ -1,4 +1,5 @@
 import torch
+import math
 
 def compute_geometric_median(x: torch.Tensor, max_iter=1000) -> torch.Tensor:
     """
@@ -25,3 +26,6 @@ def compute_geometric_median(x: torch.Tensor, max_iter=1000) -> torch.Tensor:
         y = (w.unsqueeze(-1) * x).sum(dim=0) / w.sum()
 
     return y
+
+def compute_gaussian_dist_prob(x: torch.Tensor) -> torch.Tensor:
+    return ((x ** 2) / 2).exp() / (math.sqrt(2 * math.pi))
