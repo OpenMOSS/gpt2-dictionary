@@ -15,7 +15,8 @@ from core.sae import SparseAutoEncoder
 from core.config import LanguageModelSAEPruningConfig, LanguageModelSAETrainingConfig
 from core.optim import get_scheduler
 from core.evals import run_evals
-from core.utils.misc import print_once, norm_ratio
+from core.utils.misc import print_once
+from core.utils.math import norm_ratio
 
 def finetune_sae(
     model: HookedTransformer,
@@ -263,87 +264,3 @@ def finetune_sae(
             },
             path,
         )
-
-@torch.no_grad()
-def prune_sae(
-    sae: SparseAutoEncoder,
-    activation_store: ActivationStore,
-    cfg: LanguageModelSAEPruningConfig,
-):
-    sae.eval()
-    n_training_tokens = 0
-    act_times = torch.zeros(cfg.d_sae, device=cfg.device, dtype=torch.int)
-    max_acts = torch.zeros(cfg.d_sae, device=cfg.device, dtype=cfg.dtype)
-    activation_store.initialize()
-
-    sae_module = sae
-    if cfg.use_ddp:
-        sae = DDP(sae, device_ids=[cfg.rank], output_device=cfg.device)
-        sae_module: SparseAutoEncoder = sae.module
-
-    if not cfg.use_ddp or cfg.rank == 0:
-        pbar = tqdm(total=cfg.total_training_tokens, desc="Pruning SAE", smoothing=0.01)
-    while n_training_tokens < cfg.total_training_tokens:
-        # Get the next batch of activations
-        batch = activation_store.next(batch_size=cfg.train_batch_size)["activation"]
-
-        # Forward pass
-        (
-            _,
-            (
-                _,
-                aux_data,
-            )
-        ) = sae.forward(batch)
-
-        act_times += (aux_data["feature_acts"] > 0).int().sum(0)
-        max_acts = torch.max(max_acts, aux_data["feature_acts"].max(0).values)
-
-        n_tokens_current = batch.size(0)
-        if cfg.use_ddp:
-            dist.reduce(n_tokens_current, dst=0)
-        n_training_tokens += n_tokens_current
-
-        if not cfg.use_ddp or cfg.rank == 0:
-            pbar.update(n_tokens_current)
-
-    if not cfg.use_ddp or cfg.rank == 0:
-        pbar.close()
-
-    if cfg.use_ddp:
-        dist.reduce(act_times, dst=0, op=dist.ReduceOp.SUM)
-        dist.reduce(max_acts, dst=0, op=dist.ReduceOp.MAX)
-
-    if not cfg.use_ddp or cfg.rank == 0:
-        sae_module.feature_act_mask.data = ((
-            act_times > cfg.dead_feature_threshold * cfg.total_training_tokens
-        ) & (max_acts > cfg.dead_feature_max_act_threshold) & (sae_module.decoder.norm(p=2, dim=1) >= cfg.decoder_norm_threshold)).float()
-        sae_module.feature_act_mask.requires_grad_(False)
-
-        if cfg.log_to_wandb:
-            wandb.log(
-                {
-                    "sparsity/dead_features": (act_times < cfg.dead_feature_threshold * cfg.total_training_tokens).sum().item(),
-                    "sparsity/max_acts_below_threshold": (max_acts < cfg.dead_feature_max_act_threshold).sum().item(),
-                    "sparsity/decoder_norm_below_threshold": (sae_module.decoder.norm(p=2, dim=1) < cfg.decoder_norm_threshold).sum().item(),
-                    "sparsity/total_pruned_features": (sae_module.feature_act_mask == 0).sum().item(),
-                },
-            )
-
-        print("Dead features:", (act_times < cfg.dead_feature_threshold * cfg.total_training_tokens).sum().item())
-        print("Max acts below threshold:", (max_acts < cfg.dead_feature_max_act_threshold).sum().item())
-        print("Decoder norm below threshold:", (sae_module.decoder.norm(p=2, dim=1) < cfg.decoder_norm_threshold).sum().item())
-        print("Total pruned features:", (sae_module.feature_act_mask == 0).sum().item())
-
-        path = os.path.join(
-            cfg.exp_result_dir, cfg.exp_name, "checkpoints", "pruned.pt"
-        )
-        torch.save(
-            {
-                "sae": sae_module.state_dict(),
-                "n_training_tokens": n_training_tokens,
-            },
-            path,
-        )
-        
-    return sae_module

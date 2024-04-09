@@ -27,5 +27,10 @@ def compute_geometric_median(x: torch.Tensor, max_iter=1000) -> torch.Tensor:
 
     return y
 
+def norm_ratio(a, b):
+    a_norm = torch.norm(a, 2, dim=0).mean()
+    b_norm = torch.norm(b, 2, dim=0).mean()
+    return a_norm/b_norm
+
 def compute_gaussian_dist_prob(x: torch.Tensor) -> torch.Tensor:
     return ((x ** 2) / 2).exp() / (math.sqrt(2 * math.pi))
