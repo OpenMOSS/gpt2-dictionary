@@ -25,7 +25,6 @@ def l0train_sae(
     activation_store: ActivationStore,
     cfg: LanguageModelL0SAETrainingConfig,
 ):
-    model.to(torch.device(cfg.hookedmodel_device_temp))
     total_training_tokens = cfg.total_training_tokens
     total_training_steps = total_training_tokens // cfg.effective_batch_size
 
@@ -43,6 +42,7 @@ def l0train_sae(
         )[1:]
 
     activation_store.initialize()
+    # model.to(torch.device(cfg.hookedmodel_device_temp))
 
     # Initialize the SAE decoder bias if necessary
     if cfg.use_decoder_bias and (not cfg.use_ddp or cfg.rank == 0):
@@ -112,8 +112,19 @@ def l0train_sae(
             dist.all_reduce(n_forward_passes_since_fired, op=dist.ReduceOp.MIN)
 
         if cfg.l0_type == 'glu':
+            # smoothly increase l0_beta(the factor of l1) by adding a smooth conjunction between linear part and constant part.
+            gamma=0.8
+            warm_up_steps = cfg.lr_warm_up_steps
+            smooth_steps = gamma * warm_up_steps
+            def beta_factor(steps):
+                if steps < smooth_steps:
+                    return 2 * (steps + 1) / (warm_up_steps * (1 + gamma)) 
+                elif steps < warm_up_steps:
+                    return 1 - ((steps / warm_up_steps - 1) ** 2) / (1 - gamma ** 2)
+                else :
+                    return 1
             l_l1 = loss_data['l_gate'].mean()
-            loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
+            loss = loss_data['l_rec'].mean() + beta_factor(n_training_steps) * cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         elif cfg.l0_type == 'lp':
             l_l1 = loss_data['l_l1'].mean()
             loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1.mean() + loss_data['l_ghost_resid'].mean()
@@ -127,6 +138,7 @@ def l0train_sae(
                     return activations
                 def hook_func_real(activations: torch.Tensor, hook: any):
                     return aux_data['x_hat'].clone().detach().to(torch.device(cfg.hookedmodel_device_temp))
+                # pdb.set_trace()
                 x_logits = model.run_with_hooks(
                                 batch_tokens.to(torch.device(cfg.hookedmodel_device_temp)),
                                 return_type="logits",
@@ -155,7 +167,7 @@ def l0train_sae(
 
         sae_module.set_decoder_norm_to_unit_norm()
         with torch.no_grad():
-            act_freq_scores += (aux_data["feature_acts"].abs() > 0).float().sum(0)
+            act_freq_scores += (aux_data["feature_acts"].abs()).float().sum(0)
             n_frac_active_tokens += batch.size(0)
 
             n_tokens_current = torch.tensor(batch.size(0), device=cfg.device, dtype=torch.int)
@@ -187,7 +199,10 @@ def l0train_sae(
 
             if ((n_training_steps + 1) % cfg.log_frequency == 0):
                 # metrics for currents acts
-                l0 = (aux_data["feature_acts"] > 0).float().sum(-1).mean()
+                if cfg.l0_type == 'glu':
+                    l0 = (aux_data["feature_acts_thres"] > 0).float().sum(-1).mean()
+                else:
+                    l0 = (aux_data["feature_acts"] > 0).float().sum(-1).mean()
                 # mse_expec = loss_data['l_l2']
                 l_rec = loss_data["l_rec"].mean()
                 # l_l1 = loss_data["l_l1"].mean()
@@ -200,7 +215,10 @@ def l0train_sae(
                     dist.reduce(l_l1, dst=0, op=dist.ReduceOp.AVG)
                     dist.reduce(l_ghost_resid, dst=0, op=dist.ReduceOp.AVG)
 
-                per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
+                if cfg.l0_type == 'glu':
+                    per_token_l2_loss = (aux_data["x_hat_thres"] - batch).pow(2).sum(dim=-1)
+                else:
+                    per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
                 total_variance = (batch - batch.mean(0)).pow(2).sum(dim=-1)
 
                 l2_norm_error = per_token_l2_loss.sqrt().mean()
@@ -266,7 +284,8 @@ def l0train_sae(
                 run_evals(
                     sae=sae,
                     activation_store=activation_store,
-                    model=model.to(cfg.device),
+                    # model=model.to(cfg.device),
+                    model=model,
                     cfg=cfg,
                     n_training_steps=n_training_steps,
                 )

@@ -57,15 +57,22 @@ def run_evals(
         torch.cuda.empty_cache()
 
     l2_norm_in = torch.norm(original_act, dim=-1)
-    l2_norm_out = torch.norm(aux["x_hat"], dim=-1)
+    if cfg.l0_type == 'glu':
+        l2_norm_out = torch.norm(aux["x_hat_thres"], dim=-1)
+    else:
+        l2_norm_out = torch.norm(aux["x_hat"], dim=-1)
     if cfg.use_ddp:
         dist.reduce(l2_norm_in, dst=0, op=dist.ReduceOp.AVG)
         dist.reduce(l2_norm_out, dst=0, op=dist.ReduceOp.AVG)
     l2_norm_ratio = l2_norm_out / l2_norm_in
 
-    pseudo_x_hat = aux["x_hat"] / l2_norm_out.unsqueeze(-1) * l2_norm_in.unsqueeze(-1)
+    if cfg.l0_type == 'glu':
+        pseudo_x_hat = aux["x_hat_thres"] / l2_norm_out.unsqueeze(-1) * l2_norm_in.unsqueeze(-1)
+        l0 = (aux["feature_acts_thres"] > 0).float().sum(-1)
+    else:
+        pseudo_x_hat = aux["x_hat"] / l2_norm_out.unsqueeze(-1) * l2_norm_in.unsqueeze(-1)
+        l0 = (aux["feature_acts"] > 0).float().sum(-1)
     explained_variance = 1 - (pseudo_x_hat - original_act).pow(2).sum(dim=-1) / (original_act - original_act.mean(dim=0, keepdim=True).mean(dim=1, keepdim=True)).pow(2).sum(dim=-1)
-    l0 = (aux["feature_acts"] > 0).float().sum(-1)
 
     # TODO: DDP
 
@@ -146,7 +153,10 @@ def get_recons_loss(
 
     def replacement_hook(activations: torch.Tensor, hook: Any):
         _, (_, aux) = sae.forward(activations)
-        activations = aux["x_hat"].to(activations.dtype)
+        if cfg.l0_type == 'glu':
+            activations = aux["x_hat_thres"].to(activations.dtype)
+        else:
+            activations = aux["x_hat"].to(activations.dtype)
         return activations
     
     recons_loss: torch.Tensor = model.run_with_hooks(
