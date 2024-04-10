@@ -262,6 +262,38 @@ class SparseAutoEncoder(torch.nn.Module):
         return mean_thomson_potential
     
     @torch.no_grad()
+    def activation_encoder(self, x: torch.Tensor):
+        # norm_factor: (batch_size,)
+        norm_factor = self.compute_norm_factor(x)
+
+        x = x * norm_factor
+
+        if self.cfg.use_decoder_bias:
+            x = x - self.decoder_bias
+        
+        # hidden_pre: (batch_size, d_sae)
+        hidden_pre = einsum(
+            x,
+            self.encoder,
+            "... d_model, d_model d_sae -> ... d_sae",
+        ) + self.encoder_bias
+
+        if self.cfg.use_glu_encoder:
+            # hidden_pre_glu: (batch_size, d_sae)
+            hidden_pre_glu = einsum(
+                x,
+                self.encoder_glu,
+                "... d_model, d_model d_sae -> ... d_sae",
+            ) + self.encoder_bias_glu
+            hidden_pre_glu = torch.sigmoid(hidden_pre_glu)
+            hidden_pre = hidden_pre * hidden_pre_glu
+
+        # feature_acts: (batch_size, d_sae)
+        feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
+        return feature_acts
+        
+    
+    @torch.no_grad()
     def features_decoder(self, feature_acts):
         x_hat = einsum(
             feature_acts,
