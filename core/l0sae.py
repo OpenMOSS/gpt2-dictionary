@@ -114,9 +114,14 @@ class L0SparseAutoEncoder(torch.nn.Module):
                 self.encoder_glu * gate_norm_factor,
                 "... d_model, d_model d_sae -> ... d_sae",
             ) + self.encoder_bias_glu
-            # hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
-            hidden_pre_glu = F.sigmoid(hidden_pre_glu)
-            # hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
+            # pdb.set_trace()
+            if self.cfg.glu_method == 'clamp':
+                hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
+            elif self.cfg.glu_method == 'sigtrunc':
+                hidden_pre_glu = F.sigmoid(hidden_pre_glu)
+                hidden_pre_glu = F.threshold(hidden_pre_glu, self.cfg.glu_threshold, 0, inplace=False)
+            elif self.cfg.glu_method == 'sig':
+                hidden_pre_glu = F.sigmoid(hidden_pre_glu)
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
 
@@ -126,13 +131,19 @@ class L0SparseAutoEncoder(torch.nn.Module):
                 self.decoder,
                 "... d_sae, d_sae d_model -> ... d_model",
             )
-            with torch.no_grad():
-                feature_acts_thres = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * F.threshold(hidden_pre_glu, 0.5, 0, inplace=False)
-                x_hat_thres = einsum(
-                    feature_acts_thres,
-                    self.decoder,
-                    "... d_sae, d_sae d_model -> ... d_model",
-                )
+            if self.cfg.glu_method == 'sig':
+                # feature_acts_thres = feature_acts.clone().detach()
+                # x_hat_thres = x_hat.clone().detach()
+                with torch.no_grad():
+                    feature_acts_thres = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * torch.where(hidden_pre_glu>self.cfg.glu_threshold, hidden_pre_glu, 0)
+                    x_hat_thres = einsum(
+                        feature_acts_thres,
+                        self.decoder,
+                        "... d_sae, d_sae d_model -> ... d_model",
+                    )
+            else:
+                feature_acts_thres = feature_acts.clone().detach()
+                x_hat_thres = x_hat.clone().detach()
                 
         else:
             # feature_acts: (batch_size, d_sae)

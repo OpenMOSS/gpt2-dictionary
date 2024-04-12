@@ -420,6 +420,8 @@ class L0SAEConfig(SAEConfig):
     n_sample_group:int = 10
     lp_p:float = 0.1
     data_parallel:bool = False
+    glu_threshold:float = 0.5
+    glu_method:str = 'clamp'
 
     def __post_init__(self):
         super().__post_init__()
