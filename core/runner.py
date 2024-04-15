@@ -23,6 +23,9 @@ from core.feature.features_to_logits import features_to_logits
 
 
 def finetune_runner(cfg: LanguageModelSAETrainingConfig):
+    cfg.save_hyperparameters()
+    cfg.save_lm_config()
+    
     sae = SparseAutoEncoder(cfg=cfg)
     if cfg.from_pretrained_path is not None:
         sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
@@ -61,6 +64,7 @@ def language_model_l0sae_runner(cfg: LanguageModelL0SAETrainingConfig):
     if cfg.from_pretrained_path is not None:
         sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
     hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
+    # model = HookedTransformer.from_pretrained('gpt2', device=cfg.hookedmodel_device_temp, cache_dir=cfg.cache_dir, hf_model=hf_model)
     model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
     model.eval()
     activation_store = ActivationStore.from_config(model=model, cfg=cfg)

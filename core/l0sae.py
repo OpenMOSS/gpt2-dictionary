@@ -115,10 +115,7 @@ class L0SparseAutoEncoder(torch.nn.Module):
             ) + self.encoder_bias_glu
             # hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
             hidden_pre_glu = F.sigmoid(hidden_pre_glu)
-            anneal_factor = 1
-            if self.cfg.glu_method == 'anneal':
-                anneal_factor = 100_000 / ((training_steps+1) * 2) if (100_000 / (training_steps + 1)) < 1 else 1
-            hidden_pre_glu = F.threshold(hidden_pre_glu, anneal_factor * 1e-2, 0, inplace=False)
+            hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
 
@@ -128,24 +125,7 @@ class L0SparseAutoEncoder(torch.nn.Module):
                 self.decoder,
                 "... d_sae, d_sae d_model -> ... d_model",
             )
-        elif self.cfg.l0_type == 'clamp':       
-            # hidden_pre_glu: (batch_size, d_sae)
-            hidden_pre_glu = einsum(
-                x,
-                self.encoder_glu * gate_norm_factor,
-                # self.encoder_glu,
-                "... d_model, d_model d_sae -> ... d_sae",
-            ) + self.encoder_bias_glu
-            hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
-            # feature_acts: (batch_size, d_sae)
-            feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
-
-            # x_hat: (batch_size, d_model)
-            x_hat = einsum(
-                feature_acts,
-                self.decoder,
-                "... d_sae, d_sae d_model -> ... d_model",
-            )
+                
         else:
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
@@ -220,6 +200,8 @@ class L0SparseAutoEncoder(torch.nn.Module):
         }
         if self.cfg.l0_type == "glu":
             aux_data.update({"encoder_glu": self.encoder_glu})
+            aux_data.update({"feature_acts_thres": feature_acts_thres})
+            aux_data.update({"x_hat_thres": x_hat_thres / norm_factor})
 
         loss = l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean()
         #FIXME

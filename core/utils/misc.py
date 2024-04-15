@@ -26,7 +26,3 @@ def check_file_path_unused(file_path):
         print(f"Error: File {file_path} already exists. Please choose a different file path.")
         exit() 
 
-def norm_ratio(a, b):
-    a_norm = torch.norm(a, 2, dim=0).mean()
-    b_norm = torch.norm(b, 2, dim=0).mean()
-    return a_norm/b_norm

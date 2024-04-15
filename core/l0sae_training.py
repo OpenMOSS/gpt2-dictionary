@@ -42,6 +42,7 @@ def l0train_sae(
         )[1:]
 
     activation_store.initialize()
+    # model.to(torch.device(cfg.hookedmodel_device_temp))
 
     # Initialize the SAE decoder bias if necessary
     if cfg.use_decoder_bias and (not cfg.use_ddp or cfg.rank == 0):
@@ -203,7 +204,11 @@ def l0train_sae(
 
         sae_module.set_decoder_norm_to_unit_norm()
         with torch.no_grad():
-            act_freq_scores += (aux_data["feature_acts"].abs() > 0).float().sum(0)
+            if cfg.l0_type == 'glu':
+                act_freq_scores_no = act_freq_scores + (aux_data["feature_acts"].abs()).float().sum(0)
+                act_freq_scores += (aux_data["feature_acts_thres"].abs()).float().sum(0)
+            else:
+                act_freq_scores += (aux_data["feature_acts"].abs()).float().sum(0)
             n_frac_active_tokens += batch.size(0)
 
             n_tokens_current = torch.tensor(batch.size(0), device=cfg.device, dtype=torch.int)
@@ -218,6 +223,7 @@ def l0train_sae(
                     dist.reduce(n_frac_active_tokens, dst=0)
                 if cfg.log_to_wandb and (not cfg.use_ddp or cfg.rank == 0):
                     feature_sparsity = act_freq_scores / n_frac_active_tokens
+                    feature_sparsity_no = act_freq_scores_no / n_frac_active_tokens
                     log_feature_sparsity = torch.log10(feature_sparsity + 1e-10)
                     wandb_histogram = wandb.Histogram(log_feature_sparsity.detach().cpu().numpy())
                     wandb.log(
@@ -225,7 +231,9 @@ def l0train_sae(
                             "metrics/mean_log10_feature_sparsity": log_feature_sparsity.mean().item(),
                             "plots/feature_density_line_chart": wandb_histogram,
                             "sparsity/below_1e-5": (feature_sparsity < 1e-5).sum().item(),
+                            "sparsity/below_1e-5_no_thres": (feature_sparsity_no < 1e-5).sum().item(),
                             "sparsity/below_1e-6": (feature_sparsity < 1e-6).sum().item(),
+                            "sparsity/below_1e-6_no_thres": (feature_sparsity_no < 1e-6).sum().item(),
                         },
                         step=n_training_steps + 1,
                     )
@@ -247,7 +255,11 @@ def l0train_sae(
                     dist.reduce(l_l1, dst=0, op=dist.ReduceOp.AVG)
                     dist.reduce(l_ghost_resid, dst=0, op=dist.ReduceOp.AVG)
 
-                per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
+                if cfg.l0_type == 'glu':
+                    per_token_l2_loss_no = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
+                    per_token_l2_loss = (aux_data["x_hat_thres"] - batch).pow(2).sum(dim=-1)
+                else:
+                    per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
                 total_variance = (batch - batch.mean(0)).pow(2).sum(dim=-1)
 
                 l2_norm_error = per_token_l2_loss.sqrt().mean()
@@ -268,6 +280,7 @@ def l0train_sae(
                         total_variance = torch.cat(total_variance_list, dim=0)
 
                 explained_variance = 1 - per_token_l2_loss / total_variance
+                explained_variance_no = 1 - per_token_l2_loss_no / total_variance
 
                 # mean_thomson_potential = sae_module.compute_thomson_potential()
 
@@ -282,6 +295,7 @@ def l0train_sae(
                             "losses/overall_loss": loss.item(),
                             # variance explained
                             "metrics/explained_variance": explained_variance.mean().item(),
+                            "metrics/explained_variance_no_thres": explained_variance_no.mean().item(),
                             "metrics/explained_variance_std": explained_variance.std().item(),
                             "metrics/l0": l0.item(),
                             # "metrics/mean_thomson_potential": mean_thomson_potential.item(),
@@ -343,7 +357,10 @@ def l0train_sae(
 
             if not cfg.use_ddp or cfg.rank == 0:
                 l_rec = loss_data["l_rec"].mean().item()
-                l_l1 = loss_data["l_l1"].mean().item()
+                if cfg.l0_type == 'glu':
+                    l_l1 = loss_data["l_gate"].mean().item()
+                else:
+                    l_l1 = loss_data["l_l1"].mean().item()
                 pbar.set_description(
                     f"{n_training_steps}| MSE Loss {l_rec:.3f} | L1 {l_l1:.3f}"
                 )
