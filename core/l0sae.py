@@ -89,7 +89,6 @@ class L0SparseAutoEncoder(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, dead_neuron_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         # norm_factor: (batch_size,)
-        # pdb.set_trace()
         norm_factor = self.compute_norm_factor(x)
         if self.cfg.l0_type == 'glu':
             gate_norm_factor = self.compute_norm_factor(self.encoder_glu)
@@ -106,17 +105,20 @@ class L0SparseAutoEncoder(torch.nn.Module):
             "... d_model, d_model d_sae -> ... d_sae",
         ) + self.encoder_bias
 
-        #FIXME
         if self.cfg.l0_type == 'glu':
             # hidden_pre_glu: (batch_size, d_sae)
             hidden_pre_glu = einsum(
                 x,
+                # self.encoder_glu,
                 self.encoder_glu * gate_norm_factor,
                 "... d_model, d_model d_sae -> ... d_sae",
             ) + self.encoder_bias_glu
             # hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
             hidden_pre_glu = F.sigmoid(hidden_pre_glu)
-            hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
+            anneal_factor = 1
+            if self.cfg.glu_method == 'anneal':
+                anneal_factor = 100_000 / ((training_steps+1) * 2) if (100_000 / (training_steps + 1)) < 1 else 1
+            hidden_pre_glu = F.threshold(hidden_pre_glu, anneal_factor * 1e-2, 0, inplace=False)
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
 
@@ -126,7 +128,24 @@ class L0SparseAutoEncoder(torch.nn.Module):
                 self.decoder,
                 "... d_sae, d_sae d_model -> ... d_model",
             )
-                
+        elif self.cfg.l0_type == 'clamp':       
+            # hidden_pre_glu: (batch_size, d_sae)
+            hidden_pre_glu = einsum(
+                x,
+                self.encoder_glu * gate_norm_factor,
+                # self.encoder_glu,
+                "... d_model, d_model d_sae -> ... d_sae",
+            ) + self.encoder_bias_glu
+            hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
+            # feature_acts: (batch_size, d_sae)
+            feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
+
+            # x_hat: (batch_size, d_model)
+            x_hat = einsum(
+                feature_acts,
+                self.decoder,
+                "... d_sae, d_sae d_model -> ... d_model",
+            )
         else:
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)

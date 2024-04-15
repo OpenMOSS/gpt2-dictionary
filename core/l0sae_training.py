@@ -25,7 +25,6 @@ def l0train_sae(
     activation_store: ActivationStore,
     cfg: LanguageModelL0SAETrainingConfig,
 ):
-    model.to(torch.device(cfg.hookedmodel_device_temp))
     total_training_tokens = cfg.total_training_tokens
     total_training_steps = total_training_tokens // cfg.effective_batch_size
 
@@ -76,7 +75,7 @@ def l0train_sae(
     scheduler.step()
 
     if not cfg.use_ddp or cfg.rank == 0:
-        pbar = tqdm(total=total_training_tokens, desc="Training SAE", smoothing=0.01)
+        pbar = tqdm(total=total_training_tokens, desc="Training SAE", smoothing=0.01, position=0)
     while n_training_tokens < total_training_tokens:
         if n_training_steps == total_training_steps - cfg.lr_cool_down_steps:
             sae.cfg.use_ghost_grads = False
@@ -92,7 +91,8 @@ def l0train_sae(
             n_forward_passes_since_fired
             > cfg.dead_feature_window
         ).bool()
-
+        # if n_training_steps == 21640:
+        #     pdb.set_trace()
         # Forward pass
         (
             loss,
@@ -112,34 +112,81 @@ def l0train_sae(
             dist.all_reduce(n_forward_passes_since_fired, op=dist.ReduceOp.MIN)
 
         if cfg.l0_type == 'glu':
+            beta_factor = min((n_training_steps + 1) / cfg.lr_warm_up_steps, 1)
             l_l1 = loss_data['l_gate'].mean()
-            loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
+            loss = loss_data['l_rec'].mean() + beta_factor * cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         elif cfg.l0_type == 'lp':
             l_l1 = loss_data['l_l1'].mean()
             loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1.mean() + loss_data['l_ghost_resid'].mean()
         elif cfg.l0_type == 'kl':
             # pdb.set_trace()
-            batch_tokens = batch_dict['context'].to(torch.int64)
-            sae.eval()
+            # batch_tokens = batch_dict['context'][:,0].to(torch.int64)
+            # sae.eval()
+            # with torch.no_grad():
+            #     hook_point = cfg.hook_point
+            #     def hook_func(activations: torch.Tensor, hook: any):
+            #         return activations
+            #     def hook_func_real(activations: torch.Tensor, hook: any):
+            #         return aux_data['x_hat']
+            #     pdb.set_trace()
+            #     x_logits = model.run_with_hooks(
+            #                     batch_tokens,
+            #                     return_type="logits",
+            #                     fwd_hooks=[(hook_point, hook_func)],
+            #     )
+            #     x_hat_logits = model.run_with_hooks(
+            #                     batch_tokens,
+            #                     return_type="logits",
+            #                     fwd_hooks=[(hook_point, hook_func_real)],
+            #     )
+            # sae.train()
+            # x_logits = x_logits.to(torch.device(cfg.device))
+            # x_hat_logits = x_hat_logits.to(torch.device(cfg.device))
             with torch.no_grad():
+                # pdb.set_trace()
+                batch_tokens = batch_dict['context'].to(torch.int64)
                 hook_point = cfg.hook_point
                 def hook_func(activations: torch.Tensor, hook: any):
                     return activations
-                def hook_func_real(activations: torch.Tensor, hook: any):
-                    return aux_data['x_hat'].clone().detach().to(torch.device(cfg.hookedmodel_device_temp))
-                x_logits = model.run_with_hooks(
-                                batch_tokens.to(torch.device(cfg.hookedmodel_device_temp)),
+                x_logits = []
+                x_hat_logits = []
+                mini_batch = 64 
+                for i in range(cfg.train_batch_size // mini_batch):
+                    start = i*mini_batch
+                    x_logits_i = model.run_with_hooks(
+                                    batch_tokens[start:start+mini_batch],
+                                    return_type="logits",
+                                    fwd_hooks=[(hook_point, hook_func)],
+                    )
+                    x_logits.append(x_logits_i)
+                    def hook_func_real(activations: torch.Tensor, hook: any):
+                        return aux_data['x_hat'][start:start+mini_batch]
+                    # pdb.set_trace()
+                    x_hat_logits_i = model.run_with_hooks(
+                                    batch_tokens[start:start+mini_batch],
+                                    return_type="logits",
+                                    fwd_hooks=[(hook_point, hook_func_real)],
+                    )
+                    x_hat_logits.append(x_hat_logits_i)
+                i += 1
+                start = i*mini_batch
+                x_logits_i = model.run_with_hooks(
+                                batch_tokens[start:],
                                 return_type="logits",
                                 fwd_hooks=[(hook_point, hook_func)],
                 )
-                x_hat_logits = model.run_with_hooks(
-                                batch_tokens.to(torch.device(cfg.hookedmodel_device_temp)),
+                x_logits.append(x_logits_i)
+                def hook_func_real(activations: torch.Tensor, hook: any):
+                    return aux_data['x_hat'][start:]
+                x_hat_logits_i = model.run_with_hooks(
+                                batch_tokens[start:],
                                 return_type="logits",
                                 fwd_hooks=[(hook_point, hook_func_real)],
                 )
+                x_hat_logits.append(x_hat_logits_i)
             sae.train()
-            x_logits = x_logits.to(torch.device(cfg.device))
-            x_hat_logits = x_hat_logits.to(torch.device(cfg.device))
+            x_logits = torch.stach(x_logits)
+            x_hat_logits = torch.stack(x_hat_logits)
             input_log = F.log_softmax(x_logits, dim=1)
             output = F.softmax(x_hat_logits, dim=1)
             output_log = F.log_softmax(x_hat_logits, dim=1)
@@ -148,9 +195,10 @@ def l0train_sae(
             loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l0 + cfg.l1_coefficient * loss_data['l_l1'].mean() + loss_data['l_ghost_resid'].mean()
         else:
             l_l1 = loss_data['l_l1'].mean()
-            loss = loss_data['l_rec'].mean() + cfg.l1_coefficient * l_l1 + loss_data['l_ghost_resid'].mean()
+            loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         loss.backward()
         sae_module.remove_gradient_parallel_to_decoder_directions()
+        torch.nn.utils.clip_grad_norm_(sae.parameters(), max_norm=cfg.glu_grad_clip) 
         optimizer.step()
 
         sae_module.set_decoder_norm_to_unit_norm()
@@ -188,7 +236,6 @@ def l0train_sae(
             if ((n_training_steps + 1) % cfg.log_frequency == 0):
                 # metrics for currents acts
                 l0 = (aux_data["feature_acts"] > 0).float().sum(-1).mean()
-                # mse_expec = loss_data['l_l2']
                 l_rec = loss_data["l_rec"].mean()
                 # l_l1 = loss_data["l_l1"].mean()
                 l_ghost_resid = loss_data["l_ghost_resid"].mean()
@@ -230,7 +277,6 @@ def l0train_sae(
                     log_dict = {
                             # losses
                             "losses/mse_loss": l_rec.item(),
-                            # "losses/mse_expectation": mse_expec.item(),
                             "losses/l1_loss": l_l1.item(),
                             "losses/ghost_grad_loss": l_ghost_resid.item(),
                             "losses/overall_loss": loss.item(),
@@ -266,7 +312,7 @@ def l0train_sae(
                 run_evals(
                     sae=sae,
                     activation_store=activation_store,
-                    model=model.to(cfg.device),
+                    model=model,
                     cfg=cfg,
                     n_training_steps=n_training_steps,
                 )

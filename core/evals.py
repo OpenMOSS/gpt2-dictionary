@@ -32,6 +32,7 @@ def run_evals(
         sae,
         activation_store,
         cfg,
+        n_training_steps,
         n_batches=10,
     )
 
@@ -50,7 +51,7 @@ def run_evals(
     # get act
     original_act = cache[cfg.hook_point]
 
-    _, (_, aux) = sae.forward(original_act)
+    _, (_, aux) = sae.forward(original_act, n_training_steps)
     del cache
 
     if "cuda" in str(model.cfg.device):
