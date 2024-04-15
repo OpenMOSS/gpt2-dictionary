@@ -58,7 +58,8 @@ def train_sae(
     optimizer = Adam(sae.parameters(), lr=cfg.lr, betas=cfg.betas)
     if cfg.from_pretrained_path is not None:
         checkpoint = torch.load(cfg.from_pretrained_path, map_location=cfg.device)
-        optimizer.load_state_dict(checkpoint["optimizer"])
+        if "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
 
     scheduler = get_scheduler(
         cfg.lr_scheduler_name,
@@ -104,6 +105,8 @@ def train_sae(
         if cfg.use_ddp:
             dist.all_reduce(n_forward_passes_since_fired, op=dist.ReduceOp.MIN)
 
+        if cfg.finetuning:
+            loss = loss_data['l_rec'].mean()
         loss.backward()
         sae_module.remove_gradient_parallel_to_decoder_directions()
         optimizer.step()

@@ -5,11 +5,7 @@ import { Ban, Check, Info } from "lucide-react";
 import { useAsyncFn } from "react-use";
 import { Textarea } from "../ui/textarea";
 import camelcaseKeys from "camelcase-keys";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "../ui/hover-card";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../ui/hover-card";
 
 const FeatureCustomInterpretionArea = ({
   feature,
@@ -20,22 +16,16 @@ const FeatureCustomInterpretionArea = ({
   defaultInterpretation: Interpretation | null;
   onInterpretation: (interpretation: Interpretation) => void;
 }) => {
-  const [customInput, setCustomInput] = useState<string>(
-    defaultInterpretation?.text || ""
-  );
+  const [customInput, setCustomInput] = useState<string>(defaultInterpretation?.text || "");
   const [state, submit] = useAsyncFn(async () => {
     if (!customInput) {
       alert("Please enter your interpretation.");
       return;
     }
     const interpretation = await fetch(
-      `${import.meta.env.VITE_BACKEND_URL}/dictionaries/${
-        feature.dictionaryName
-      }/features/${
+      `${import.meta.env.VITE_BACKEND_URL}/dictionaries/${feature.dictionaryName}/features/${
         feature.featureIndex
-      }/interpret?type=custom&custom_interpretation=${encodeURIComponent(
-        customInput
-      )}`,
+      }/interpret?type=custom&custom_interpretation=${encodeURIComponent(customInput)}`,
       {
         method: "POST",
       }
@@ -70,9 +60,7 @@ const FeatureCustomInterpretionArea = ({
 export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
   const [showCustomInput, setShowCustomInput] = useState<boolean>(false);
 
-  const [interpretation, setInterpretation] = useState<Interpretation | null>(
-    feature.interpretation
-  );
+  const [interpretation, setInterpretation] = useState<Interpretation | null>(feature.interpretation);
 
   const [validating, setValidating] = useState<boolean>(false);
 
@@ -134,9 +122,7 @@ export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
       <p className="font-bold">Interpretation</p>
       <div className="flex gap-12">
         <div className="flex flex-col justify-between gap-4 basis-2/3 min-w-2/3">
-          {!interpretation && (
-            <p className="text-neutral-500">No interpretation available.</p>
-          )}
+          {!interpretation && <p className="text-neutral-500">No interpretation available.</p>}
           {interpretation && (
             <div className="flex gap-4">
               <p>
@@ -144,21 +130,14 @@ export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
                 {interpretation.detail && (
                   <HoverCard>
                     <HoverCardTrigger>
-                      <Info
-                        size={20}
-                        className="hover:text-blue-500 inline-block mx-2"
-                      />
+                      <Info size={20} className="hover:text-blue-500 inline-block mx-2" />
                     </HoverCardTrigger>
                     <HoverCardContent className="w-[800px] max-h-[400px] overflow-y-auto">
                       <div className="grid gap-4 whitespace-pre-wrap grid-cols-[auto,1fr]">
                         <div className="text-sm font-bold">Prompt:</div>
-                        <div className="text-sm">
-                          {interpretation.detail.prompt}
-                        </div>
+                        <div className="text-sm">{interpretation.detail.prompt}</div>
                         <div className="text-sm font-bold">Response:</div>
-                        <div className="text-sm">
-                          {interpretation.detail.response}
-                        </div>
+                        <div className="text-sm">{interpretation.detail.response}</div>
                       </div>
                     </HoverCardContent>
                   </HoverCard>
@@ -167,23 +146,15 @@ export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
             </div>
           )}
           <div className="flex gap-4">
-            <Button
-              size="sm"
-              onClick={autoInterpretation}
-              disabled={state.loading}
-            >
+            <Button size="sm" onClick={autoInterpretation} disabled={state.loading}>
               Automatic Interpretation
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setShowCustomInput((prev) => !prev)}
-            >
+            <Button variant="secondary" size="sm" onClick={() => setShowCustomInput((prev) => !prev)}>
               {showCustomInput
                 ? "Hide Custom Interpretation"
                 : interpretation
-                ? "Edit Interpretation"
-                : "Provide Custom Interpretation"}
+                  ? "Edit Interpretation"
+                  : "Provide Custom Interpretation"}
             </Button>
           </div>
         </div>
@@ -205,30 +176,25 @@ export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
                     {validation.method === "activation" && (
                       <>
                         <p className="text-sm">
-                          Activation prediction test checks if the LLM can
-                          simulate a Sparse Auto Encoder to predict the
-                          activation of the feature, given the description of
-                          the feature.
+                          Activation prediction test checks if the LLM can simulate a Sparse Auto Encoder to predict the
+                          activation of the feature, given the description of the feature.
                         </p>
                         <p className="text-sm">
-                          For simplicity, the LLM is only asked to predict the
-                          token with the highest activation. The test is passed
-                          if the predicted token is the same as the actual
-                          token. White spaces are ignored.
+                          For simplicity, the LLM is only asked to predict the token with the highest activation. The
+                          test is passed if the predicted token is the same as the actual token. White spaces are
+                          ignored.
                         </p>
                       </>
                     )}
                     {validation.method === "generative" && (
                       <>
                         <p className="text-sm">
-                          Generative test checks if the LLM can generate a
-                          sentence that any of the tokens in the sentence can
-                          activate the feature.
+                          Generative test checks if the LLM can generate a sentence that any of the tokens in the
+                          sentence can activate the feature.
                         </p>
                         <p className="text-sm">
-                          The test is passed if the generated sentence contains
-                          at least one token that activates the feature to a
-                          certain threshold (currently set to 1.0).
+                          The test is passed if the generated sentence contains at least one token that activates the
+                          feature to a certain threshold (currently set to 1.0).
                         </p>
                       </>
                     )}
@@ -236,9 +202,7 @@ export const FeatureInterpretation = ({ feature }: { feature: Feature }) => {
                       <div className="text-sm font-bold">Prompt:</div>
                       <div className="text-sm">{validation.detail.prompt}</div>
                       <div className="text-sm font-bold">Response:</div>
-                      <div className="text-sm">
-                        {validation.detail.response}
-                      </div>
+                      <div className="text-sm">{validation.detail.response}</div>
                     </div>
                   </HoverCardContent>
                 </HoverCard>

@@ -1,32 +1,10 @@
 import { cn } from "@/lib/utils";
 import { Token } from "@/types/feature";
 import { mergeUint8Arrays } from "@/utils/array";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "../ui/hover-card";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../ui/hover-card";
 import { Separator } from "../ui/separator";
 import { Fragment } from "react/jsx-runtime";
-
-const getAccentClassname = (
-  featureAct: number,
-  maxFeatureAct: number,
-  variant: "text" | "bg"
-) => {
-  const accentClassnames = [
-    null,
-    variant === "text" ? "text-orange-100" : "bg-orange-100",
-    variant === "text" ? "text-orange-200" : "bg-orange-200",
-    variant === "text" ? "text-orange-300" : "bg-orange-300",
-    variant === "text" ? "text-orange-400" : "bg-orange-400",
-    variant === "text" ? "text-orange-500" : "bg-orange-500",
-  ];
-
-  return accentClassnames[
-    Math.ceil((featureAct / maxFeatureAct) * (accentClassnames.length - 1))
-  ];
-};
+import { getAccentClassname } from "@/utils/style";
 
 export type TokenInfoProps = {
   token: Token;
@@ -35,24 +13,16 @@ export type TokenInfoProps = {
 
 export const TokenInfo = ({ token, maxFeatureAct }: TokenInfoProps) => {
   const hex = token.token.reduce(
-    (acc, b) =>
-      b < 32 || b > 126
-        ? `${acc}\\x${b.toString(16).padStart(2, "0")}`
-        : `${acc}${String.fromCharCode(b)}`,
+    (acc, b) => (b < 32 || b > 126 ? `${acc}\\x${b.toString(16).padStart(2, "0")}` : `${acc}${String.fromCharCode(b)}`),
     ""
   );
 
   return (
     <div className="grid grid-cols-2 gap-2">
       <div className="text-sm font-bold">Token:</div>
-      <div className="text-sm underline">{hex}</div>
+      <div className="text-sm underline whitespace-pre-wrap">{hex}</div>
       <div className="text-sm font-bold">Activation:</div>
-      <div
-        className={cn(
-          "text-sm",
-          getAccentClassname(token.featureAct, maxFeatureAct, "text")
-        )}
-      >
+      <div className={cn("text-sm", getAccentClassname(token.featureAct, maxFeatureAct, "text"))}>
         {token.featureAct.toFixed(3)}
       </div>
     </div>
@@ -65,11 +35,7 @@ export type SuperTokenProps = {
   sampleMaxFeatureAct: number;
 };
 
-export const SuperToken = ({
-  tokens,
-  maxFeatureAct,
-  sampleMaxFeatureAct,
-}: SuperTokenProps) => {
+export const SuperToken = ({ tokens, maxFeatureAct, sampleMaxFeatureAct }: SuperTokenProps) => {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const displayText = decoder
     .decode(mergeUint8Arrays(tokens.map((t) => t.token)))
@@ -84,11 +50,8 @@ export const SuperToken = ({
       <span
         className={cn(
           "underline decoration-slate-400 decoration-1 decoration-dotted underline-offset-[6px]",
-          superTokenMaxFeatureAct > 0 &&
-            "hover:shadow-lg hover:text-gray-600 cursor-pointer",
-          sampleMaxFeatureAct > 0 &&
-            superTokenMaxFeatureAct == sampleMaxFeatureAct &&
-            "font-bold",
+          superTokenMaxFeatureAct > 0 && "hover:shadow-lg hover:text-gray-600 cursor-pointer",
+          sampleMaxFeatureAct > 0 && superTokenMaxFeatureAct == sampleMaxFeatureAct && "font-bold",
           getAccentClassname(superTokenMaxFeatureAct, maxFeatureAct, "bg")
         )}
       >
@@ -108,9 +71,7 @@ export const SuperToken = ({
       </HoverCardTrigger>
       <HoverCardContent className="w-[300px] text-wrap flex flex-col gap-4">
         {tokens.length > 1 && (
-          <div className="text-sm font-bold">
-            This super token is composed of the {tokens.length} tokens below:
-          </div>
+          <div className="text-sm font-bold">This super token is composed of the {tokens.length} tokens below:</div>
         )}
         {tokens.map((token, i) => (
           <Fragment key={i}>

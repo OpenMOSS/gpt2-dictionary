@@ -56,14 +56,7 @@ type TextAreaProps = {
 
 export const Textarea = React.forwardRef<TextAreaRef, TextAreaProps>(
   (
-    {
-      maxHeight = Number.MAX_SAFE_INTEGER,
-      minHeight = 52,
-      className,
-      onChange,
-      value,
-      ...props
-    }: TextAreaProps,
+    { maxHeight = Number.MAX_SAFE_INTEGER, minHeight = 52, className, onChange, value, ...props }: TextAreaProps,
     ref: React.Ref<TextAreaRef>
   ) => {
     const textAreaRef = React.useRef<HTMLTextAreaElement | null>(null);

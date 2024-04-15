@@ -14,22 +14,14 @@ const Pagination = ({ className, ...props }: React.ComponentProps<"nav">) => (
 );
 Pagination.displayName = "Pagination";
 
-const PaginationContent = React.forwardRef<
-  HTMLUListElement,
-  React.ComponentProps<"ul">
->(({ className, ...props }, ref) => (
-  <ul
-    ref={ref}
-    className={cn("flex flex-row items-center gap-1", className)}
-    {...props}
-  />
-));
+const PaginationContent = React.forwardRef<HTMLUListElement, React.ComponentProps<"ul">>(
+  ({ className, ...props }, ref) => (
+    <ul ref={ref} className={cn("flex flex-row items-center gap-1", className)} {...props} />
+  )
+);
 PaginationContent.displayName = "PaginationContent";
 
-const PaginationItem = React.forwardRef<
-  HTMLLIElement,
-  React.ComponentProps<"li">
->(({ className, ...props }, ref) => (
+const PaginationItem = React.forwardRef<HTMLLIElement, React.ComponentProps<"li">>(({ className, ...props }, ref) => (
   <li ref={ref} className={cn("", className)} {...props} />
 ));
 PaginationItem.displayName = "PaginationItem";
@@ -39,12 +31,7 @@ type PaginationLinkProps = {
 } & Pick<ButtonProps, "size"> &
   React.ComponentProps<"a">;
 
-const PaginationLink = ({
-  className,
-  isActive,
-  size = "icon",
-  ...props
-}: PaginationLinkProps) => (
+const PaginationLink = ({ className, isActive, size = "icon", ...props }: PaginationLinkProps) => (
   <a
     aria-current={isActive ? "page" : undefined}
     className={cn(
@@ -61,47 +48,24 @@ const PaginationLink = ({
 );
 PaginationLink.displayName = "PaginationLink";
 
-const PaginationPrevious = ({
-  className,
-  ...props
-}: React.ComponentProps<typeof PaginationLink>) => (
-  <PaginationLink
-    aria-label="Go to previous page"
-    size="default"
-    className={cn("gap-1 pl-2.5", className)}
-    {...props}
-  >
+const PaginationPrevious = ({ className, ...props }: React.ComponentProps<typeof PaginationLink>) => (
+  <PaginationLink aria-label="Go to previous page" size="default" className={cn("gap-1 pl-2.5", className)} {...props}>
     <ChevronLeft className="h-4 w-4" />
     <span>Previous</span>
   </PaginationLink>
 );
 PaginationPrevious.displayName = "PaginationPrevious";
 
-const PaginationNext = ({
-  className,
-  ...props
-}: React.ComponentProps<typeof PaginationLink>) => (
-  <PaginationLink
-    aria-label="Go to next page"
-    size="default"
-    className={cn("gap-1 pr-2.5", className)}
-    {...props}
-  >
+const PaginationNext = ({ className, ...props }: React.ComponentProps<typeof PaginationLink>) => (
+  <PaginationLink aria-label="Go to next page" size="default" className={cn("gap-1 pr-2.5", className)} {...props}>
     <span>Next</span>
     <ChevronRight className="h-4 w-4" />
   </PaginationLink>
 );
 PaginationNext.displayName = "PaginationNext";
 
-const PaginationEllipsis = ({
-  className,
-  ...props
-}: React.ComponentProps<"span">) => (
-  <span
-    aria-hidden
-    className={cn("flex h-9 w-9 items-center justify-center", className)}
-    {...props}
-  >
+const PaginationEllipsis = ({ className, ...props }: React.ComponentProps<"span">) => (
+  <span aria-hidden className={cn("flex h-9 w-9 items-center justify-center", className)} {...props}>
     <MoreHorizontal className="h-4 w-4" />
     <span className="sr-only">More pages</span>
   </span>
@@ -116,4 +80,61 @@ export {
   PaginationLink,
   PaginationNext,
   PaginationPrevious,
+};
+
+export const AppPagination = ({
+  page,
+  setPage,
+  maxPage,
+}: {
+  page: number;
+  setPage: React.Dispatch<React.SetStateAction<number>>;
+  maxPage: number;
+}) => {
+  return (
+    <Pagination>
+      <PaginationContent>
+        <PaginationItem>
+          <PaginationPrevious onClick={() => setPage((prev) => Math.max(1, prev - 1))} />
+        </PaginationItem>
+        {page > 3 && (
+          <PaginationItem>
+            <PaginationLink isActive={page === 1} onClick={() => setPage(1)}>
+              1
+            </PaginationLink>
+          </PaginationItem>
+        )}
+        {page > 4 && (
+          <PaginationItem>
+            <PaginationEllipsis />
+          </PaginationItem>
+        )}
+        {Array.from({ length: maxPage })
+          .map((_, i) => i + 1)
+          .filter((i) => i >= page - 2 && i <= page + 2)
+          .map((i) => (
+            <PaginationItem key={i}>
+              <PaginationLink isActive={page === i} onClick={() => setPage(i)}>
+                {i}
+              </PaginationLink>
+            </PaginationItem>
+          ))}
+        {page < maxPage - 3 && (
+          <PaginationItem>
+            <PaginationEllipsis />
+          </PaginationItem>
+        )}
+        {page < maxPage - 2 && (
+          <PaginationItem>
+            <PaginationLink isActive={page === maxPage} onClick={() => setPage(maxPage)}>
+              {maxPage}
+            </PaginationLink>
+          </PaginationItem>
+        )}
+        <PaginationItem>
+          <PaginationNext onClick={() => setPage((prev) => Math.min(maxPage, prev + 1))} />
+        </PaginationItem>
+      </PaginationContent>
+    </Pagination>
+  );
 };

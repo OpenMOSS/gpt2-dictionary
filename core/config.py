@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import torch
 import torch.distributed as dist
@@ -23,6 +23,7 @@ class RunnerConfig:
     dtype: torch.dtype = torch.float32
 
     exp_name: str = "test"
+    exp_series: str | None = None
     exp_result_dir: str = "results"
 
     def __post_init__(self):
@@ -226,6 +227,8 @@ class LanguageModelSAETrainingConfig(LanguageModelSAEConfig):
     lr_cool_down_steps: int = 10000
     train_batch_size: int = 4096
 
+    finetuning: bool = False
+
     # Resampling protocol args
     feature_sampling_window: int = 1000
     dead_feature_window: int = 5000  # unless this window is larger feature sampling,
@@ -307,9 +310,13 @@ class ActivationGenerationConfig(LanguageModelConfig, TextDatasetConfig):
             self.activation_save_path = f"activations/{self.dataset_path.split('/')[-1]}/{self.model_name.replace('/', '_')}_{self.context_size}"
         os.makedirs(self.activation_save_path, exist_ok=True)
 
+@dataclass
+class MongoConfig:
+    mongo_uri: str = "mongodb://localhost:27017"
+    mongo_db: str = "mechinterp"
 
 @dataclass
-class LanguageModelSAEAnalysisConfig(SAEConfig, ActivationStoreConfig):
+class LanguageModelSAEAnalysisConfig(SAEConfig, ActivationStoreConfig, MongoConfig):
     """
     Configuration for analyzing a sparse autoencoder on a language model.
     """
@@ -319,35 +326,12 @@ class LanguageModelSAEAnalysisConfig(SAEConfig, ActivationStoreConfig):
         False  # If True, we will sample the activations based on weights. Otherwise, top n_samples activations will be used.
     )
     sample_weight_exponent: float = 2.0
-    n_samples: int = 1000
-    analysis_name: str = "top_activations"
-    subsample: Optional[float] = None
+    subsample: Dict[str, Dict[str, Any]] = field(default_factory=lambda: { "top_activations": {"proportion": 1.0, "n_samples": 10} })
 
-    def __post_init__(self):
-        super().__post_init__()
-
-        if not self.use_ddp or self.rank == 0:
-            os.makedirs(
-                os.path.join(self.exp_result_dir, self.exp_name, "analysis"),
-                exist_ok=True,
-            )
-            if os.path.exists(
-                os.path.join(
-                    self.exp_result_dir, self.exp_name, "analysis", self.analysis_name
-                )
-            ):
-                raise ValueError(
-                    f"Analysis {self.analysis_name} for experiment {self.exp_name} already exists. Consider changing the experiment name or the analysis name."
-                )
-            os.makedirs(
-                os.path.join(
-                    self.exp_result_dir, self.exp_name, "analysis", self.analysis_name
-                )
-            )
 
 @dataclass
-class FeaturesDecoderConfig(SAEConfig, LanguageModelConfig):
-    file_path: str = None
+class FeaturesDecoderConfig(SAEConfig, LanguageModelConfig, MongoConfig):
+    top: int = 10
 
 @dataclass
 class LanguageModelSAEFinetuningConfig(LanguageModelSAEConfig):
@@ -390,6 +374,23 @@ class LanguageModelSAEFinetuningConfig(LanguageModelSAEConfig):
         super().__post_init__()
 
         if not self.use_ddp or self.rank == 0:
+            os.makedirs(
+                os.path.join(self.exp_result_dir, self.exp_name, "analysis"),
+                exist_ok=True,
+            )
+            if os.path.exists(
+                os.path.join(
+                    self.exp_result_dir, self.exp_name, "analysis", self.analysis_name
+                )
+            ):
+                raise ValueError(
+                    f"Analysis {self.analysis_name} for experiment {self.exp_name} already exists. Consider changing the experiment name or the analysis name."
+                )
+            os.makedirs(
+                os.path.join(
+                    self.exp_result_dir, self.exp_name, "analysis", self.analysis_name
+                )
+            )
             if os.path.exists(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints")):
                 raise ValueError(f"Checkpoints for experiment {self.exp_name} already exist. Consider changing the experiment name.")
             os.makedirs(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints"))

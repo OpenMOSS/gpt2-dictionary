@@ -43,6 +43,23 @@ export const FeatureSchema = z.object({
       samples: z.array(SampleSchema),
     })
   ),
+  logits: z
+    .object({
+      topPositive: z.array(
+        z.object({
+          logit: z.number(),
+          token: z.string(),
+        })
+      ),
+      topNegative: z.array(
+        z.object({
+          logit: z.number(),
+          token: z.string(),
+        })
+      ),
+      histogram: z.any(),
+    })
+    .nullable(),
   interpretation: InterpretationSchema.nullable(),
 });
 

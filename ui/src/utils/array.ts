@@ -1,8 +1,13 @@
-export const zip = <T, U>(arr1: T[], arr2: U[]): [T, U][] => {
-  const result: [T, U][] = [];
-  for (let i = 0; i < Math.min(arr1.length, arr2.length); i++) {
-    result.push([arr1[i], arr2[i]]);
+export const zip = <T extends unknown[][]>(
+  ...arrays: T
+): { [K in keyof T]: T[K] extends (infer U)[] ? U : never }[] => {
+  const minLength = arrays.reduce((min, arr) => Math.min(min, arr.length), Infinity);
+  const result = [];
+
+  for (let i = 0; i < minLength; i++) {
+    result.push(arrays.map((arr) => arr[i]) as { [K in keyof T]: T[K] extends (infer U)[] ? U : never });
   }
+
   return result;
 };
 
