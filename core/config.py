@@ -18,7 +18,6 @@ from transformer_lens.loading_from_pretrained import get_official_model_name
 class RunnerConfig:
     use_ddp: bool = False
     device: str = "cpu"
-    hookedmodel_device_temp: str = "cpu"
     seed: int = 42
     dtype: torch.dtype = torch.float32
 
@@ -147,6 +146,18 @@ class SAEConfig(RunnerConfig):
     lp: int = 1
 
     use_ghost_grads: bool = True
+
+    # Optimize sae training using other L0 methods instead of L1 norm
+    l0_type: str = "none"
+    l0_beta: float = 1e-2
+    # n_sample_total:int = 1000
+    # n_sample_group:int = 10
+    lp_p: float = 0.9
+    # data_parallel=False
+    grad_clip: float = None
+    use_grad_clip: bool = False
+    # glu_threshold:float = 0.01
+    glu_method:str = "sigtrunc"
 
     def __post_init__(self):
         super().__post_init__()
@@ -338,9 +349,6 @@ class LanguageModelSAEFinetuningConfig(LanguageModelSAEConfig):
     """
     Configuration for training a sparse autoencoder on a language model.
     """
-    # Finetuning Parameters
-    ft_loss_type: str = None
-    ft_kl_coefficient: float = 1.
 
     # Training Parameters
     total_training_tokens: int = 300_000_000
@@ -391,110 +399,3 @@ class LanguageModelSAEFinetuningConfig(LanguageModelSAEConfig):
                     self.exp_result_dir, self.exp_name, "analysis", self.analysis_name
                 )
             )
-            if os.path.exists(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints")):
-                raise ValueError(f"Checkpoints for experiment {self.exp_name} already exist. Consider changing the experiment name.")
-            os.makedirs(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints"))
-
-        if self.decoder_bias_init_method not in ["geometric_median", "mean", "zeros"]:
-            raise ValueError(
-                f"b_dec_init_method must be geometric_median, mean, or zeros. Got {self.decoder_bias_init_method}"
-            )
-        if self.decoder_bias_init_method == "zeros":
-            print_once(
-                "Warning: We are initializing b_dec to zeros. This is probably not what you want."
-            )
-
-        self.effective_batch_size = self.train_batch_size * self.world_size if self.use_ddp else self.train_batch_size
-        print_once(f"Effective batch size: {self.effective_batch_size}")
-
-        total_training_steps = self.total_training_tokens // self.effective_batch_size
-        print_once(f"Total training steps: {total_training_steps}")
-
-        if self.use_ghost_grads:
-            print_once("Using Ghost Grads.")
-
-@dataclass
-class L0SAEConfig(SAEConfig):
-    l0_type:str = "glu"    # Could be "glu", "lp", "kl"
-    l0_beta:float = 0.01
-    n_sample_total:int = 1000
-    n_sample_group:int = 10
-    lp_p:float = 0.1
-    data_parallel:bool = False
-    glu_method:str = 'none'
-    glu_grad_clip:float = 2e-2
-
-    def __post_init__(self):
-        super().__post_init__()
-        if self.d_sae is None:
-            self.d_sae = self.d_model * self.expansion_factor
-
-@dataclass
-class LanguageModelL0SAEConfig(L0SAEConfig, WandbConfig, ActivationStoreConfig):
-    pass
-
-@dataclass
-class LanguageModelL0SAETrainingConfig(LanguageModelL0SAEConfig):
-    """
-    Configuration for training a sparse autoencoder on a language model.
-    """
-
-    # Training Parameters
-    total_training_tokens: int = 300_000_000
-    lr: float = 0.0004
-    betas: Tuple[float, float] = (0.9, 0.999)
-    lr_scheduler_name: str = (
-        "constantwithwarmup"  # constant, constantwithwarmup, linearwarmupdecay, cosineannealing, cosineannealingwarmup, exponentialwarmup
-    )
-    lr_end: Optional[float] = 1 / 32
-    lr_warm_up_steps: int = 5000
-    lr_cool_down_steps: int = 10000
-    train_batch_size: int = 4096
-
-    # Resampling protocol args
-    feature_sampling_window: int = 1000
-    dead_feature_window: int = 5000  # unless this window is larger feature sampling,
-
-    dead_feature_threshold: float = 1e-6
-
-    # Evaluation
-    eval_frequency: int = 1000
-
-    # Misc
-    log_frequency: int = 10
-
-    n_checkpoints: int = 10
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if not self.use_ddp or self.rank == 0:
-            if os.path.exists(
-                os.path.join(self.exp_result_dir, self.exp_name, "checkpoints")
-            ):
-                raise ValueError(
-                    f"Checkpoints for experiment {self.exp_name} already exist. Consider changing the experiment name."
-                )
-            os.makedirs(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints"))
-
-        if self.decoder_bias_init_method not in ["geometric_median", "mean", "zeros"]:
-            raise ValueError(
-                f"b_dec_init_method must be geometric_median, mean, or zeros. Got {self.decoder_bias_init_method}"
-            )
-        if self.decoder_bias_init_method == "zeros":
-            print_once(
-                "Warning: We are initializing b_dec to zeros. This is probably not what you want."
-            )
-
-        self.effective_batch_size = (
-            self.train_batch_size * self.world_size
-            if self.use_ddp
-            else self.train_batch_size
-        )
-        print_once(f"Effective batch size: {self.effective_batch_size}")
-
-        total_training_steps = self.total_training_tokens // self.effective_batch_size
-        print_once(f"Total training steps: {total_training_steps}")
-
-        if self.use_ghost_grads:
-            print_once("Using Ghost Grads.")

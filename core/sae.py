@@ -1,5 +1,6 @@
 from typing import Dict
 import torch
+import torch.nn.functional as F 
 import math
 from einops import einsum
 
@@ -26,6 +27,12 @@ class SparseAutoEncoder(torch.nn.Module):
             self.encoder_bias_glu = torch.nn.Parameter(torch.empty((cfg.d_sae,), dtype=cfg.dtype, device=cfg.device))
             torch.nn.init.zeros_(self.encoder_bias_glu)
 
+            self.encoder_glu_hidden = torch.nn.Parameter(torch.empty((cfg.d_sae, cfg.d_sae), dtype=cfg.dtype, device=cfg.device))
+            torch.nn.init.kaiming_uniform_(self.encoder_glu_hidden)
+
+            self.encoder_bias_glu_hidden = torch.nn.Parameter(torch.empty((cfg.d_sae,), dtype=cfg.dtype, device=cfg.device))
+            torch.nn.init.zeros_(self.encoder_bias_glu_hidden)
+
         self.feature_act_mask = torch.nn.Parameter(torch.ones((cfg.d_sae,), dtype=cfg.dtype, device=cfg.device))
         self.feature_act_scale = torch.nn.Parameter(torch.ones((cfg.d_sae,), dtype=cfg.dtype, device=cfg.device))
 
@@ -49,7 +56,10 @@ class SparseAutoEncoder(torch.nn.Module):
             self.encoder_bias,
         ]
         if self.cfg.use_glu_encoder:
-            base_parameters.extend([self.encoder_glu, self.encoder_bias_glu])
+            if self.cfg.glu_method == 'segfunc':
+                base_parameters.extend([self.encoder_glu, self.encoder_bias_glu, self.encoder_glu_hidden, self.encoder_bias_glu_hidden])
+            else:
+                base_parameters.extend([self.encoder_glu, self.encoder_bias_glu])
         if self.cfg.use_decoder_bias:
             base_parameters.append(self.decoder_bias)
         for p in self.parameters():
@@ -82,6 +92,8 @@ class SparseAutoEncoder(torch.nn.Module):
     def forward(self, x: torch.Tensor, dead_neuron_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         # norm_factor: (batch_size,)
         norm_factor = self.compute_norm_factor(x)
+        if self.cfg.use_glu_encoder:
+            gate_norm_factor = self.compute_norm_factor(self.encoder_glu)
 
         x = x * norm_factor
 
@@ -99,28 +111,53 @@ class SparseAutoEncoder(torch.nn.Module):
             # hidden_pre_glu: (batch_size, d_sae)
             hidden_pre_glu = einsum(
                 x,
-                self.encoder_glu,
+                self.encoder_glu * gate_norm_factor,
                 "... d_model, d_model d_sae -> ... d_sae",
             ) + self.encoder_bias_glu
-            hidden_pre_glu = torch.sigmoid(hidden_pre_glu)
-            hidden_pre = hidden_pre * hidden_pre_glu
 
-        # feature_acts: (batch_size, d_sae)
-        feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
+            if self.cfg.glu_method == 'nn':
+                hidden_pre_glu = einsum(
+                    F.relu(hidden_pre_glu),
+                    self.encoder_glu_hidden,
+                    "... d_sae, d_sae d_sae -> ... d_sae",
+                ) + self.encoder_bias_glu_hidden
+                hidden_pre_glu = F.sigmoid(hidden_pre_glu)
+                hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
+            elif self.cfg.glu_method == 'segfunc':
+                hidden_pre_glu = torch.where(hidden_pre_glu > 0, torch.sigmoid(hidden_pre_glu), torch.where(hidden_pre_glu > -4, ((hidden_pre_glu + 4) ** 2) / 32, 0))
+            else:
+                hidden_pre_glu = F.sigmoid(hidden_pre_glu)
+                hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
+            # feature_acts: (batch_size, d_sae)
+            feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
 
-        # x_hat: (batch_size, d_model)
-        x_hat = einsum(
-            feature_acts,
-            self.decoder,
-            "... d_sae, d_sae d_model -> ... d_model",
-        )
+            # x_hat: (batch_size, d_model)
+            x_hat = einsum(
+                feature_acts,
+                self.decoder,
+                "... d_sae, d_sae d_model -> ... d_model",
+            )
+                
+        else:
+            # feature_acts: (batch_size, d_sae)
+            feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
+
+            # x_hat: (batch_size, d_model)
+            x_hat = einsum(
+                feature_acts,
+                self.decoder,
+                "... d_sae, d_sae d_model -> ... d_model",
+            )
 
         # Take the sum of the dense dimension in MSE loss
         # l_rec: (batch_size, d_model)
         l_rec = (x_hat - x).pow(2) / (x - x.mean(dim=0, keepdim=True)).pow(2).sum(dim=-1, keepdim=True).clamp(min=1e-8).sqrt()
 
         # l_l1: (batch_size,)
-        l_l1 = torch.norm(feature_acts, p=self.cfg.lp, dim=-1)
+        if self.cfg.use_glu_encoder:
+            l_l1 = torch.norm(hidden_pre_glu, p=self.cfg.lp, dim=-1)
+        else:
+            l_l1 = torch.norm(feature_acts, p=self.cfg.lp, dim=-1)
 
         l_ghost_resid = torch.tensor(0.0, dtype=self.cfg.dtype, device=self.cfg.device)
         
@@ -170,6 +207,10 @@ class SparseAutoEncoder(torch.nn.Module):
             "feature_acts": feature_acts,
             "x_hat": x_hat,
         }
+        if self.cfg.use_glu_encoder:
+            aux_data.update({"encoder_glu": self.encoder_glu})
+            # aux_data.update({"feature_acts_thres": feature_acts_thres})
+            # aux_data.update({"x_hat_thres": x_hat_thres / norm_factor})
 
         return l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean(), (loss_data, aux_data)
     

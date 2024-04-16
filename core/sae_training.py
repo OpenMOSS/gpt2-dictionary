@@ -3,6 +3,7 @@ import os
 import torch
 from torch.optim import Adam
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.nn.functional as F
 import torch.distributed as dist
 
 from transformer_lens import HookedTransformer
@@ -58,7 +59,7 @@ def train_sae(
     optimizer = Adam(sae.parameters(), lr=cfg.lr, betas=cfg.betas)
     if cfg.from_pretrained_path is not None:
         checkpoint = torch.load(cfg.from_pretrained_path, map_location=cfg.device)
-        if "optimizer" in checkpoint:
+        if "optimizer" in checkpoint.keys():
             optimizer.load_state_dict(checkpoint["optimizer"])
 
     scheduler = get_scheduler(
@@ -73,11 +74,14 @@ def train_sae(
     scheduler.step()
 
     if not cfg.use_ddp or cfg.rank == 0:
-        pbar = tqdm(total=total_training_tokens, desc="Training SAE", smoothing=0.01)
+        pbar = tqdm(total=total_training_tokens, desc="Training SAE", smoothing=0.01, position=0)
     while n_training_tokens < total_training_tokens:
+        if n_training_steps == total_training_steps - cfg.lr_cool_down_steps:
+            sae.cfg.use_ghost_grads = False
         sae.train()
         # Get the next batch of activations
-        batch = activation_store.next(batch_size=cfg.train_batch_size)["activation"]
+        batch_dict = activation_store.next(batch_size=cfg.train_batch_size)
+        batch = batch_dict["activation"]
 
         scheduler.step()
         optimizer.zero_grad()
@@ -107,8 +111,69 @@ def train_sae(
 
         if cfg.finetuning:
             loss = loss_data['l_rec'].mean()
+        if cfg.l0_type == 'glu':
+            beta_factor = min((n_training_steps + 1) / cfg.lr_warm_up_steps, 1)
+            l_l1 = loss_data['l_l1'].mean()
+            loss = loss_data['l_rec'].mean() + beta_factor * cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
+        elif cfg.l0_type == 'kl':
+            with torch.no_grad():
+                # pdb.set_trace()
+                batch_tokens = batch_dict['context'].to(torch.int64)
+                hook_point = cfg.hook_point
+                def hook_func(activations: torch.Tensor, hook: any):
+                    return activations
+                x_logits = []
+                x_hat_logits = []
+                mini_batch = 64 
+                for i in range(cfg.train_batch_size // mini_batch):
+                    start = i*mini_batch
+                    x_logits_i = model.run_with_hooks(
+                                    batch_tokens[start:start+mini_batch],
+                                    return_type="logits",
+                                    fwd_hooks=[(hook_point, hook_func)],
+                    )
+                    x_logits.append(x_logits_i)
+                    def hook_func_real(activations: torch.Tensor, hook: any):
+                        return aux_data['x_hat'][start:start+mini_batch]
+                    # pdb.set_trace()
+                    x_hat_logits_i = model.run_with_hooks(
+                                    batch_tokens[start:start+mini_batch],
+                                    return_type="logits",
+                                    fwd_hooks=[(hook_point, hook_func_real)],
+                    )
+                    x_hat_logits.append(x_hat_logits_i)
+                i += 1
+                start = i*mini_batch
+                x_logits_i = model.run_with_hooks(
+                                batch_tokens[start:],
+                                return_type="logits",
+                                fwd_hooks=[(hook_point, hook_func)],
+                )
+                x_logits.append(x_logits_i)
+                def hook_func_real(activations: torch.Tensor, hook: any):
+                    return aux_data['x_hat'][start:]
+                x_hat_logits_i = model.run_with_hooks(
+                                batch_tokens[start:],
+                                return_type="logits",
+                                fwd_hooks=[(hook_point, hook_func_real)],
+                )
+                x_hat_logits.append(x_hat_logits_i)
+            sae.train()
+            x_logits = torch.stach(x_logits)
+            x_hat_logits = torch.stack(x_hat_logits)
+            input_log = F.log_softmax(x_logits, dim=1)
+            output = F.softmax(x_hat_logits, dim=1)
+            output_log = F.log_softmax(x_hat_logits, dim=1)
+            l_l0 = (output * (output_log - input_log)).sum() / input_log.size(0) 
+            #FIXME
+            loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l0 + cfg.l1_coefficient * loss_data['l_l1'].mean() + loss_data['l_ghost_resid'].mean()
+        else:
+            l_l1 = loss_data['l_l1'].mean()
+            loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         loss.backward()
         sae_module.remove_gradient_parallel_to_decoder_directions()
+        if cfg.use_grad_clip and n_training_steps > 50_000:
+            torch.nn.utils.clip_grad_norm_(sae.parameters(), max_norm=cfg.grad_clip) 
         optimizer.step()
 
         sae_module.set_decoder_norm_to_unit_norm()
@@ -184,8 +249,7 @@ def train_sae(
                 current_learning_rate = optimizer.param_groups[0]["lr"]
 
                 if cfg.log_to_wandb and (not cfg.use_ddp or cfg.rank == 0):
-                    wandb.log(
-                        {
+                    log_dict = {
                             # losses
                             "losses/mse_loss": l_rec.item(),
                             "losses/l1_loss": l_l1.item(),
@@ -202,9 +266,15 @@ def train_sae(
                             "sparsity/mean_passes_since_fired": n_forward_passes_since_fired.mean().item(),
                             "sparsity/dead_features": ghost_grad_neuron_mask.sum().item(),
                             "sparsity/useful_features": sae_module.decoder.norm(p=2, dim=1).gt(0.99).sum().item(),
+                            "sparsity/encoder_norm": sae_module.encoder.norm(p=2, dim=1).mean().item(),
+                            
                             "details/current_learning_rate": current_learning_rate,
                             "details/n_training_tokens": n_training_tokens,
-                        },
+                        }
+                    if cfg.use_glu_encoder:
+                        log_dict.update({"sparsity/encoder_glu_norm": aux_data['encoder_glu'].norm(p=2, dim=1).mean().item()})
+                    wandb.log(
+                        log_dict,
                         step=n_training_steps + 1,
                     )
 
