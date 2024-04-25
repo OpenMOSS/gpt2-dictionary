@@ -125,8 +125,16 @@ class SparseAutoEncoder(torch.nn.Module):
                 hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
             elif self.cfg.glu_method == 'segfunc':
                 hidden_pre_glu = torch.where(hidden_pre_glu > 0, torch.sigmoid(hidden_pre_glu), torch.where(hidden_pre_glu > -4, ((hidden_pre_glu + 4) ** 2) / 32, 0))
-            else:
+            elif self.cfg.glu_method == 'clamp':
+                hidden_pre_glu = torch.clamp(hidden_pre_glu, 0, 1)
+            elif self.cfg.glu_method == 'sig':
                 hidden_pre_glu = F.sigmoid(hidden_pre_glu)
+                hidden_pre_glu_thres = F.threshold(hidden_pre_glu, 1e-3, 0, inplace=False)
+                feature_acts_thres = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu_thres
+            else:
+                hidden_pre_glu_before_sigmoid = hidden_pre_glu
+                hidden_pre_glu = F.sigmoid(hidden_pre_glu)
+                hidden_pre_glu_before_threshold = hidden_pre_glu
                 hidden_pre_glu = F.threshold(hidden_pre_glu, 1e-2, 0, inplace=False)
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0) * hidden_pre_glu
@@ -137,7 +145,12 @@ class SparseAutoEncoder(torch.nn.Module):
                 self.decoder,
                 "... d_sae, d_sae d_model -> ... d_model",
             )
-                
+            if self.cfg.glu_method == 'sig':
+                x_hat_thres = einsum(
+                    feature_acts_thres,
+                    self.decoder,
+                    "... d_sae, d_sae d_model -> ... d_model",
+                )
         else:
             # feature_acts: (batch_size, d_sae)
             feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
@@ -156,6 +169,8 @@ class SparseAutoEncoder(torch.nn.Module):
         # l_l1: (batch_size,)
         if self.cfg.use_glu_encoder:
             l_l1 = torch.norm(hidden_pre_glu, p=self.cfg.lp, dim=-1)
+            # l_l1 = torch.norm(hidden_pre_glu_before_sigmoid, p=self.cfg.lp, dim=-1)
+            # l_l1 = torch.norm(hidden_pre_glu_before_threshold, p=self.cfg.lp, dim=-1)
         else:
             l_l1 = torch.norm(feature_acts, p=self.cfg.lp, dim=-1)
 
@@ -192,10 +207,14 @@ class SparseAutoEncoder(torch.nn.Module):
 
         if self.cfg.use_decoder_bias:
             x_hat = x_hat + self.decoder_bias
+            if self.cfg.glu_method == 'sig':
+                x_hat_thres = x_hat_thres + self.decoder_bias
 
         # Recover the original scale of the activation vectors
         # x_hat: (batch_size, activation_size)
         x_hat = x_hat / norm_factor
+        if self.cfg.glu_method == 'sig':
+            x_hat_thres = x_hat_thres / norm_factor
 
         loss_data = {
             "l_rec": l_rec,
@@ -209,8 +228,9 @@ class SparseAutoEncoder(torch.nn.Module):
         }
         if self.cfg.use_glu_encoder:
             aux_data.update({"encoder_glu": self.encoder_glu})
-            # aux_data.update({"feature_acts_thres": feature_acts_thres})
-            # aux_data.update({"x_hat_thres": x_hat_thres / norm_factor})
+            if self.cfg.glu_method == 'sig':
+                aux_data.update({"feature_acts_thres": feature_acts_thres})
+                aux_data.update({"x_hat_thres": x_hat_thres / norm_factor})
 
         return l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean(), (loss_data, aux_data)
     

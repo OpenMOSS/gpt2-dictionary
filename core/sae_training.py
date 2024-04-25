@@ -5,6 +5,8 @@ from torch.optim import Adam
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
 import torch.distributed as dist
+from einops import rearrange
+import pdb
 
 from transformer_lens import HookedTransformer
 
@@ -80,8 +82,14 @@ def train_sae(
             sae.cfg.use_ghost_grads = False
         sae.train()
         # Get the next batch of activations
-        batch_dict = activation_store.next(batch_size=cfg.train_batch_size)
-        batch = batch_dict["activation"]
+        if cfg.l0_type == 'kl':
+            tokens = activation_store.next_tokens(cfg.store_batch_size)
+            # pdb.set_trace()
+            _, cache = model.run_with_cache(tokens, names_filter=[cfg.hook_point])
+            batch = rearrange(cache[cfg.hook_point].to(dtype=cfg.dtype, device=cfg.device), "b l d -> (b l) d")
+        else:
+            batch_dict = activation_store.next(batch_size=cfg.train_batch_size)
+            batch = batch_dict["activation"]
 
         scheduler.step()
         optimizer.zero_grad()
@@ -103,7 +111,10 @@ def train_sae(
             ghost_grad_neuron_mask,
         )
         
-        did_fire = (aux_data["feature_acts"] > 0).float().sum(0) > 0
+        if cfg.glu_method == 'sig':
+            did_fire = (aux_data["feature_acts_thres"] > 0).float().sum(0) > 0
+        else:
+            did_fire = (aux_data["feature_acts"] > 0).float().sum(0) > 0
         n_forward_passes_since_fired += 1
         n_forward_passes_since_fired[did_fire] = 0
         if cfg.use_ddp:
@@ -112,55 +123,31 @@ def train_sae(
         if cfg.finetuning:
             loss = loss_data['l_rec'].mean()
         if cfg.l0_type == 'glu':
-            beta_factor = min((n_training_steps + 1) / cfg.lr_warm_up_steps, 1)
+            # beta_factor = min((n_training_steps + 1) / cfg.lr_warm_up_steps, 1)
+            beta_factor = 1
             l_l1 = loss_data['l_l1'].mean()
             loss = loss_data['l_rec'].mean() + beta_factor * cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         elif cfg.l0_type == 'kl':
+            sae.eval()
             with torch.no_grad():
-                # pdb.set_trace()
-                batch_tokens = batch_dict['context'].to(torch.int64)
+                batch_tokens = tokens.to(torch.int64)
                 hook_point = cfg.hook_point
                 def hook_func(activations: torch.Tensor, hook: any):
                     return activations
-                x_logits = []
-                x_hat_logits = []
-                mini_batch = 64 
-                for i in range(cfg.train_batch_size // mini_batch):
-                    start = i*mini_batch
-                    x_logits_i = model.run_with_hooks(
-                                    batch_tokens[start:start+mini_batch],
-                                    return_type="logits",
-                                    fwd_hooks=[(hook_point, hook_func)],
-                    )
-                    x_logits.append(x_logits_i)
-                    def hook_func_real(activations: torch.Tensor, hook: any):
-                        return aux_data['x_hat'][start:start+mini_batch]
-                    # pdb.set_trace()
-                    x_hat_logits_i = model.run_with_hooks(
-                                    batch_tokens[start:start+mini_batch],
-                                    return_type="logits",
-                                    fwd_hooks=[(hook_point, hook_func_real)],
-                    )
-                    x_hat_logits.append(x_hat_logits_i)
-                i += 1
-                start = i*mini_batch
-                x_logits_i = model.run_with_hooks(
-                                batch_tokens[start:],
-                                return_type="logits",
-                                fwd_hooks=[(hook_point, hook_func)],
+                x_logits = model.run_with_hooks(
+                    batch_tokens,
+                    return_type="logits",
+                    fwd_hooks=[(hook_point, hook_func)]
                 )
-                x_logits.append(x_logits_i)
                 def hook_func_real(activations: torch.Tensor, hook: any):
-                    return aux_data['x_hat'][start:]
-                x_hat_logits_i = model.run_with_hooks(
-                                batch_tokens[start:],
+                    return rearrange(aux_data['x_hat'],'(b l) d -> b l d', b=16, l=256)
+                # pdb.set_trace()
+                x_hat_logits = model.run_with_hooks(
+                                batch_tokens,
                                 return_type="logits",
                                 fwd_hooks=[(hook_point, hook_func_real)],
                 )
-                x_hat_logits.append(x_hat_logits_i)
             sae.train()
-            x_logits = torch.stach(x_logits)
-            x_hat_logits = torch.stack(x_hat_logits)
             input_log = F.log_softmax(x_logits, dim=1)
             output = F.softmax(x_hat_logits, dim=1)
             output_log = F.log_softmax(x_hat_logits, dim=1)
@@ -171,14 +158,18 @@ def train_sae(
             l_l1 = loss_data['l_l1'].mean()
             loss = loss_data['l_rec'].mean() + cfg.l0_beta * l_l1 + loss_data['l_ghost_resid'].mean()
         loss.backward()
+        # torch.cuda.empty_cache()
         sae_module.remove_gradient_parallel_to_decoder_directions()
-        if cfg.use_grad_clip and n_training_steps > 50_000:
+        if cfg.use_grad_clip:
             torch.nn.utils.clip_grad_norm_(sae.parameters(), max_norm=cfg.grad_clip) 
         optimizer.step()
 
         sae_module.set_decoder_norm_to_unit_norm()
         with torch.no_grad():
-            act_freq_scores += (aux_data["feature_acts"].abs() > 0).float().sum(0)
+            if cfg.glu_method == 'sig':
+                act_freq_scores += (aux_data["feature_acts_thres"].abs() > 0).float().sum(0)
+            else:
+                act_freq_scores += (aux_data["feature_acts"].abs() > 0).float().sum(0)
             n_frac_active_tokens += batch.size(0)
 
             n_tokens_current = torch.tensor(batch.size(0), device=cfg.device, dtype=torch.int)
@@ -210,7 +201,10 @@ def train_sae(
 
             if ((n_training_steps + 1) % cfg.log_frequency == 0):
                 # metrics for currents acts
-                l0 = (aux_data["feature_acts"] > 0).float().sum(-1).mean()
+                if cfg.glu_method == 'sig':
+                    l0 = (aux_data["feature_acts_thres"] > 0).float().sum(-1).mean()
+                else:
+                    l0 = (aux_data["feature_acts"] > 0).float().sum(-1).mean()
                 l_rec = loss_data["l_rec"].mean()
                 l_l1 = loss_data["l_l1"].mean()
                 l_ghost_resid = loss_data["l_ghost_resid"].mean()
@@ -222,7 +216,10 @@ def train_sae(
                     dist.reduce(l_l1, dst=0, op=dist.ReduceOp.AVG)
                     dist.reduce(l_ghost_resid, dst=0, op=dist.ReduceOp.AVG)
 
-                per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
+                if cfg.glu_method == 'sig':
+                    per_token_l2_loss = (aux_data["x_hat_thres"] - batch).pow(2).sum(dim=-1)
+                else:
+                    per_token_l2_loss = (aux_data["x_hat"] - batch).pow(2).sum(dim=-1)
                 total_variance = (batch - batch.mean(0)).pow(2).sum(dim=-1)
 
                 l2_norm_error = per_token_l2_loss.sqrt().mean()
