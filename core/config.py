@@ -22,7 +22,7 @@ class RunnerConfig:
     dtype: torch.dtype = torch.float32
 
     exp_name: str = "test"
-    exp_series: str | None = None
+    exp_series: Optional[str] = None
     exp_result_dir: str = "results"
 
     def __post_init__(self):
@@ -41,6 +41,7 @@ class RunnerConfig:
 class LanguageModelConfig(RunnerConfig):
     model_name: str = "gpt2"
     hook_point: str = "blocks.0.hook_mlp_out"
+    model_from_pretrained_path: Optional[str] = None
     cache_dir: Optional[str] = None
     d_model: int = 768
     local_files_only: bool = False
@@ -125,7 +126,7 @@ class SAEConfig(RunnerConfig):
     Configuration for training or running a sparse autoencoder.
     """
 
-    from_pretrained_path: Optional[str] = None
+    sae_from_pretrained_path: Optional[str] = None
     strict_loading: bool = True
 
     use_decoder_bias: bool = True
@@ -196,7 +197,7 @@ class SAEConfig(RunnerConfig):
     ) -> dict[str, Any]:
         with open(os.path.join(exp_result_dir, exp_name, "hyperparams.json"), "r") as f:
             hyperparams = json.load(f)
-        hyperparams["from_pretrained_path"] = os.path.join(
+        hyperparams["sae_from_pretrained_path"] = os.path.join(
             exp_result_dir, exp_name, "checkpoints", ckpt_name
         )
         hyperparams["strict_loading"] = strict_loading
@@ -262,7 +263,7 @@ class LanguageModelSAETrainingConfig(LanguageModelSAEConfig):
                 os.path.join(self.exp_result_dir, self.exp_name, "checkpoints")
             ):
                 raise ValueError(
-                    f"Ckeckpoints for experiment {self.exp_name} already exist. Consider changing the experiment name."
+                    f"Checkpoints for experiment {self.exp_name} already exist. Consider changing the experiment name."
                 )
             os.makedirs(os.path.join(self.exp_result_dir, self.exp_name, "checkpoints"))
 

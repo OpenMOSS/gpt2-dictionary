@@ -59,9 +59,9 @@ def train_sae(
     n_frac_active_tokens = torch.tensor([0], device=cfg.device, dtype=torch.int)
 
     optimizer = Adam(sae.parameters(), lr=cfg.lr, betas=cfg.betas)
-    if cfg.from_pretrained_path is not None:
-        checkpoint = torch.load(cfg.from_pretrained_path, map_location=cfg.device)
-        if "optimizer" in checkpoint.keys():
+    if cfg.sae_from_pretrained_path is not None:
+        checkpoint = torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)
+        if "optimizer" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer"])
 
     scheduler = get_scheduler(

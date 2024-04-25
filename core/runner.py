@@ -5,9 +5,10 @@ import wandb
 
 import torch
 
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from transformer_lens import HookedTransformer
+from transformer_lens import HookedTransformer, HookedTransformerConfig
+from transformer_lens.loading_from_pretrained import convert_gpt2_weights
 
 from core.config import ActivationGenerationConfig, LanguageModelSAEAnalysisConfig, LanguageModelSAETrainingConfig, LanguageModelSAEConfig, LanguageModelSAEPruningConfig, FeaturesDecoderConfig
 # from core.database import MongoClient
@@ -24,15 +25,41 @@ def language_model_sae_runner(cfg: LanguageModelSAETrainingConfig):
         cfg.save_hyperparameters()
         cfg.save_lm_config()
     sae = SparseAutoEncoder(cfg=cfg)
-    if cfg.from_pretrained_path is not None:
-        sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
+    if cfg.sae_from_pretrained_path is not None:
+        sae.load_state_dict(torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
 
     if cfg.finetuning:
         # Fine-tune SAE with frozen encoder weights and bias
         sae.train_finetune_for_suppresion_parameters()
 
-    hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
-    model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
+    if cfg.model_from_pretrained_path is not None:
+        hf_model = AutoModelForCausalLM.from_pretrained(cfg.model_from_pretrained_path, cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
+        hf_config = hf_model.config
+        print(hf_config)
+        if cfg.model_name == 'gpt2':
+            tl_cfg = HookedTransformerConfig.from_dict({
+                "d_model": hf_config.n_embd,
+                "d_head": hf_config.n_embd // hf_config.n_head,
+                "n_heads": hf_config.n_head,
+                "d_mlp": hf_config.n_embd * 4,
+                "n_layers": hf_config.n_layer,
+                "n_ctx": hf_config.n_positions,
+                "eps": hf_config.layer_norm_epsilon,
+                "d_vocab": hf_config.vocab_size,
+                "act_fn": hf_config.activation_function,
+                "use_attn_scale": True,
+                "use_local_attn": False,
+                "scale_attn_by_inverse_layer_idx": hf_config.scale_attn_by_inverse_layer_idx,
+                "normalization_type": "LN",
+            })
+            model = HookedTransformer(tl_cfg, tokenizer=AutoTokenizer.from_pretrained(cfg.model_from_pretrained_path)).to(cfg.device)
+            state_dict = convert_gpt2_weights(hf_model, tl_cfg)
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            raise ValueError(f"Unsupported model name: {model_name}")
+    else:
+        hf_model = AutoModelForCausalLM.from_pretrained(cfg.model_name, cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
+        model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
     model.eval()
     activation_store = ActivationStore.from_config(model=model, cfg=cfg)
         
@@ -57,8 +84,8 @@ def language_model_sae_runner(cfg: LanguageModelSAETrainingConfig):
 
 def language_model_sae_prune_runner(cfg: LanguageModelSAEPruningConfig):
     sae = SparseAutoEncoder(cfg=cfg)
-    if cfg.from_pretrained_path is not None:
-        sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
+    if cfg.sae_from_pretrained_path is not None:
+        sae.load_state_dict(torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
     hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
     model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
     model.eval()
@@ -92,8 +119,8 @@ def language_model_sae_prune_runner(cfg: LanguageModelSAEPruningConfig):
 
 def language_model_sae_eval_runner(cfg: LanguageModelSAEConfig):
     sae = SparseAutoEncoder(cfg=cfg)
-    if cfg.from_pretrained_path is not None:
-        sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
+    if cfg.sae_from_pretrained_path is not None:
+        sae.load_state_dict(torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
     hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
     model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
     model.eval()
@@ -130,8 +157,8 @@ def activation_generation_runner(cfg: ActivationGenerationConfig):
 
 def sample_feature_activations_runner(cfg: LanguageModelSAEAnalysisConfig):
     sae = SparseAutoEncoder(cfg=cfg)
-    if cfg.from_pretrained_path is not None:
-        sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
+    if cfg.sae_from_pretrained_path is not None:
+        sae.load_state_dict(torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
 
     hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
     model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)
@@ -162,8 +189,8 @@ def sample_feature_activations_runner(cfg: LanguageModelSAEAnalysisConfig):
 def features_to_logits_runner(cfg: FeaturesDecoderConfig):
     print(cfg.exp_name + ' is running')
     sae = SparseAutoEncoder(cfg=cfg)
-    if cfg.from_pretrained_path is not None:
-        sae.load_state_dict(torch.load(cfg.from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
+    if cfg.sae_from_pretrained_path is not None:
+        sae.load_state_dict(torch.load(cfg.sae_from_pretrained_path, map_location=cfg.device)["sae"], strict=cfg.strict_loading)
     
     hf_model = AutoModelForCausalLM.from_pretrained('gpt2', cache_dir=cfg.cache_dir, local_files_only=cfg.local_files_only)
     model = HookedTransformer.from_pretrained('gpt2', device=cfg.device, cache_dir=cfg.cache_dir, hf_model=hf_model)

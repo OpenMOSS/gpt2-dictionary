@@ -1,4 +1,4 @@
-# GPT-2 Dictionary
+# Language-Model-SAEs
 
 This repo aims to provide a general codebase for conducting dictionary-learning-based mechanistic interpretability research on Language Models (LMs). It powers a configurable pipeline for training and evaluating GPT-2 dictionaries, and provides a set of tools (mainly a React-based webpage) for analyzing and visualizing the learned dictionaries.
 
@@ -104,6 +104,15 @@ We highly welcome contributions to this project. If you have any questions or su
 
 TODO: Add development guidelines
 
-## References
+## Citation
 
-TODO: Add references
+Please cite this library as:
+
+```
+@misc{Ge2024OpenMossSAEs,
+    title  = {OpenMoss Language Model Sparse Autoencoders},
+    author = {Xuyang Ge, Fukang Zhu, Junxuan Wang, Wentao Shu, Zhengfu He},
+    url    = {https://github.com/OpenMOSS/gpt2-dictionary},
+    year   = {2024}
+}
+```
