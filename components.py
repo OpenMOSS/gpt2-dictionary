@@ -1481,7 +1481,7 @@ class TransformerBlock(nn.Module):
 
         attn_feature_acts = self.attn_sae.encode(attn_out, label=attn_out)
         if self.cfg.prune_on_backward:
-            attn_feature_acts.register_hook(lambda x: x.where(x >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
+            attn_feature_acts.register_hook(lambda x: x.where(x * attn_feature_acts >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
         attn_feature_acts = self.hook_attn_feature_acts(attn_feature_acts)
         sae_predicted_attn_hat = self.attn_sae.decode(attn_feature_acts)
         attn_error = (attn_out - sae_predicted_attn_hat).detach()
@@ -1509,7 +1509,7 @@ class TransformerBlock(nn.Module):
 
             mlp_feature_acts = self.mlp_sae.encode(mlp_out, label=mlp_out)
             if self.cfg.prune_on_backward:
-                mlp_feature_acts.register_hook(lambda x: x.where(x >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
+                mlp_feature_acts.register_hook(lambda x: x.where(x * mlp_feature_acts >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
             mlp_feature_acts = self.hook_mlp_feature_acts(mlp_feature_acts)
             sae_predicted_mlp_hat = self.mlp_sae.decode(mlp_feature_acts)
 
