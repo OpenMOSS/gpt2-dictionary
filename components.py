@@ -1401,8 +1401,10 @@ class TransformerBlock(nn.Module):
         self.attn_sae = load_sae(dict_name=f'L{block_index}A')
         self.mlp_sae = load_sae(dict_name=f'L{block_index}RM2L{block_index}M')
 
-        self.attn_grad = torch.zeros(1, 16, self.cfg.d_model, device=device)
-        self.mlp_grad = torch.zeros(1, 16, self.cfg.d_model, device=device)
+        self.hook_attn_feature_acts = HookPoint()
+        self.hook_mlp_feature_acts = HookPoint()
+        self.hook_attn_sae_error = HookPoint()
+        self.hook_mlp_sae_error = HookPoint()
 
 
     def forward(
@@ -1477,20 +1479,21 @@ class TransformerBlock(nn.Module):
             )
         )  # [batch, pos, d_model]
 
-        sae_predicted_attn_hat = self.attn_sae(attn_out)[1][1]['x_hat']
-        attn_error = attn_out - sae_predicted_attn_hat
-
+        attn_feature_acts = self.attn_sae.encode(attn_out, label=attn_out)
+        if self.cfg.prune_on_backward:
+            attn_feature_acts.register_hook(lambda x: x.where(x >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
+        attn_feature_acts = self.hook_attn_feature_acts(attn_feature_acts)
+        sae_predicted_attn_hat = self.attn_sae.decode(attn_feature_acts)
+        attn_error = (attn_out - sae_predicted_attn_hat).detach()
+        attn_error.requires_grad_()
+        attn_error = self.hook_attn_sae_error(attn_error)
 
         if not self.cfg.attn_only and not self.cfg.parallel_attn_mlp:
             if self.cfg.add_sae_error:
-                resid_mid = self.hook_resid_mid(
-                    resid_pre + attn_error.detach() + sae_predicted_attn_hat
-                )  # [batch, pos, d_model]
+                resid_mid = self.hook_resid_mid(resid_pre + attn_error + sae_predicted_attn_hat)
+                  # [batch, pos, d_model]
             else:
                 resid_mid = self.hook_resid_mid(resid_pre + sae_predicted_attn_hat)
-
-            self.h1 = sae_predicted_attn_hat.register_hook(lambda grad: self.attn_grad.copy_(grad))
-
 
             mlp_in = (
                 resid_mid
@@ -1498,27 +1501,31 @@ class TransformerBlock(nn.Module):
                 else self.hook_mlp_in(resid_mid.clone())
             )
 
-            # mlp_in = mlp_in.clone().detach().requires_grad_(True)
-
-
             with torch.no_grad():
                 normalized_resid_mid = self.ln2(mlp_in)
                 mlp_out = self.hook_mlp_out(
                     self.mlp(normalized_resid_mid)
                 )  # [batch, pos, d_model]
 
-            sae_predicted_mlp_hat = self.mlp_sae(mlp_in, label=mlp_out)[1][1]['x_hat']
+            mlp_feature_acts = self.mlp_sae.encode(mlp_out, label=mlp_out)
+            if self.cfg.prune_on_backward:
+                mlp_feature_acts.register_hook(lambda x: x.where(x >= self.cfg.prune_on_backward_threshold, torch.zeros_like(x)))
+            mlp_feature_acts = self.hook_mlp_feature_acts(mlp_feature_acts)
+            sae_predicted_mlp_hat = self.mlp_sae.decode(mlp_feature_acts)
 
-            mlp_error = mlp_out - sae_predicted_mlp_hat
+            mlp_error = (mlp_out - sae_predicted_mlp_hat).detach()
+            mlp_error.requires_grad_()
+            mlp_error = self.hook_mlp_sae_error(mlp_error)
+
             if self.cfg.add_sae_error:
                 resid_post = self.hook_resid_post(
-                    resid_mid + mlp_error.detach() + sae_predicted_mlp_hat
+                    resid_mid + mlp_error + sae_predicted_mlp_hat
                 )
             else:
                 resid_post = self.hook_resid_post(
                     resid_mid + sae_predicted_mlp_hat
                 )  # [batch, pos, d_model]
-            self.h2 = sae_predicted_mlp_hat.register_hook(lambda grad: self.mlp_grad.copy_(grad))
+
         elif self.cfg.parallel_attn_mlp:
             # Dumb thing done by GPT-J, both MLP and Attn read from resid_pre and write to resid_post, no resid_mid used.
             # In GPT-J, LN1 and LN2 are tied, in GPT-NeoX they aren't.

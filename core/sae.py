@@ -173,6 +173,25 @@ class SparseAutoEncoder(torch.nn.Module):
         }
 
         return l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean(), (loss_data, aux_data)
+    
+    def encode(self, x: torch.Tensor, label: torch.Tensor):
+        x = x * self.compute_norm_factor(x).detach()
+        hidden_pre = einsum(
+            x,
+            self.encoder,
+            "... d_model, d_model d_sae -> ... d_sae",
+        ) + self.encoder_bias
+
+        feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
+        return feature_acts / self.compute_norm_factor(label).detach()
+    
+    def decode(self, feature_acts: torch.Tensor):
+        x_hat = einsum(
+            feature_acts,
+            self.decoder,
+            "... d_sae, d_sae d_model -> ... d_model",
+        )
+        return x_hat
 
     def forward_with_gradient_mask(self, x: torch.Tensor, stop_gradient_mask: torch.Tensor | None = None,
                 label: torch.Tensor | None = None):
