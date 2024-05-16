@@ -223,6 +223,9 @@ class HookedTransformer(HookedRootModule):
         # Needed for HookPoints to work
         self.setup()
 
+        self.L0RPr_sae = load_sae("L0RPr")
+        self.L0RPr_grad = torch.zeros(1, 16, self.cfg.d_model).to(device)
+
     def check_hooks_to_add(
         self,
         hook_point,
