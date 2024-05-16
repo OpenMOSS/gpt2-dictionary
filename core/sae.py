@@ -173,7 +173,75 @@ class SparseAutoEncoder(torch.nn.Module):
         }
 
         return l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean(), (loss_data, aux_data)
-    
+
+    def forward_with_gradient_mask(self, x: torch.Tensor, stop_gradient_mask: torch.Tensor | None = None,
+                label: torch.Tensor | None = None):
+        if label is None:
+            label = x
+
+        x = x * self.compute_norm_factor(x)
+        label_normed = label * self.compute_norm_factor(label)
+
+        if self.cfg.use_decoder_bias:
+            x = x - self.decoder_bias
+
+        # hidden_pre: (batch_size, d_sae)
+        hidden_pre = einsum(
+            x,
+            self.encoder,
+            "... d_model, d_model d_sae -> ... d_sae",
+        ) + self.encoder_bias
+
+        if self.cfg.use_glu_encoder:
+            # hidden_pre_glu: (batch_size, d_sae)
+            hidden_pre_glu = einsum(
+                x,
+                self.encoder_glu,
+                "... d_model, d_model d_sae -> ... d_sae",
+            ) + self.encoder_bias_glu
+            hidden_pre_glu = torch.sigmoid(hidden_pre_glu)
+            hidden_pre = hidden_pre * hidden_pre_glu
+
+        # feature_acts: (batch_size, d_sae)
+        feature_acts = self.feature_act_mask * self.feature_act_scale * torch.clamp(hidden_pre, min=0.0)
+
+        # x_hat: (batch_size, d_model)
+        x_hat = einsum(
+            feature_acts,
+            self.decoder,
+            "... d_sae, d_sae d_model -> ... d_model",
+        )
+
+        # Take the sum of the dense dimension in MSE loss
+        # l_rec: (batch_size, d_model)
+        l_rec = (x_hat - label_normed).pow(2) / (label_normed - label_normed.mean(dim=0, keepdim=True)).pow(2).sum(
+            dim=-1, keepdim=True).clamp(min=1e-8).sqrt()
+
+        # l_l1: (batch_size,)
+        l_l1 = torch.norm(feature_acts, p=self.cfg.lp, dim=-1)
+
+        l_ghost_resid = torch.tensor(0.0, dtype=self.cfg.dtype, device=self.cfg.device)
+
+        if self.cfg.use_decoder_bias:
+            x_hat = x_hat + self.decoder_bias
+
+        # Recover the original scale of the activation vectors
+        # x_hat: (batch_size, activation_size)
+        x_hat = x_hat / self.compute_norm_factor(label)
+
+        loss_data = {
+            "l_rec": l_rec,
+            "l_l1": l_l1,
+            "l_ghost_resid": l_ghost_resid,
+        }
+
+        aux_data = {
+            "feature_acts": feature_acts / self.compute_norm_factor(label),
+            "x_hat": x_hat,
+        }
+
+        return l_rec.mean() + self.cfg.l1_coefficient * l_l1.mean() + l_ghost_resid.mean(), (loss_data, aux_data)
+
     @torch.no_grad()
     def initialize_decoder_bias(self, all_activations: torch.Tensor):
         if not self.cfg.use_decoder_bias:
