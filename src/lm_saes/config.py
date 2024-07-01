@@ -163,21 +163,26 @@ class SAEConfig(BaseModelConfig):
     sae_pretrained_name_or_path: Optional[str] = None
     strict_loading: bool = True
 
-    use_decoder_bias: bool = False
+    use_decoder_bias: bool = True
     apply_decoder_bias_to_pre_encoder: bool = True  # set to False when training transcoders
-    decoder_bias_init_method: str = "geometric_median"
-    expansion_factor: int = 32
+    expansion_factor: int = 128
     d_model: int = 768
     d_sae: int = None  # type: ignore
     """ The dimension of the SAE, i.e. the number of dictionary components (or features). If None, it will be set to d_model * expansion_factor """
-    norm_activation: str = "token-wise"  # none, token-wise, batch-wise
-    decoder_exactly_unit_norm: bool = True
+    norm_activation: str = "token-wise"  # none, token-wise, batch-wise, dataset-wise
+    dataset_average_activation_norm: Dict[str, float] | None = None
+    decoder_exactly_fixed_norm: bool = False
+    sparsity_include_decoder_norm: bool = True  # set to True: sparsity loss = sum(act * corresponding_decoder_norm), otherwise loss = sum(act). Incompatible with decoder_exactly_fixed_norm
     use_glu_encoder: bool = False
+    init_decoder_norm: float | None = None  # type: ignore
+    init_encoder_norm: float | None = None  # type: ignore
+    init_encoder_with_decoder_transpose: bool = True
 
     l1_coefficient: float = 0.00008
+    l1_coefficient_warmup_steps: int = 0
     lp: int = 1
 
-    use_ghost_grads: bool = True
+    use_ghost_grads: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -185,6 +190,15 @@ class SAEConfig(BaseModelConfig):
             self.hook_point_out = self.hook_point_in
         if self.d_sae is None:
             self.d_sae = self.d_model * self.expansion_factor
+        if self.norm_activation == "dataset-wise" and self.dataset_average_activation_norm is None:
+            print(f'dataset_average_activation_norm is None and norm_activation is "dataset-wise". Will be computed automatically from the dataset.')
+        if self.sparsity_include_decoder_norm and self.decoder_exactly_fixed_norm:
+            raise ValueError("sparsity_include_decoder_norm and decoder_exactly_fixed_norm are incompatible.")
+        if self.sparsity_include_decoder_norm and self.use_ghost_grads:
+            raise ValueError("sparsity_include_decoder_norm and use_ghost_grads are incompatible.")
+        if self.init_encoder_with_decoder_transpose and isinstance(self.init_encoder_norm, float):
+            raise ValueError("init_encoder_with_decoder_transpose and init_encoder_norm with float are incompatible.")
+
 
     @staticmethod
     def from_pretrained(pretrained_name_or_path: str, strict_loading: bool = True, **kwargs):
@@ -269,6 +283,8 @@ class LanguageModelSAETrainingConfig(LanguageModelSAERunnerConfig):
     lr_warm_up_steps: int = 5000
     lr_cool_down_steps: int = 10000
     train_batch_size: int = 4096
+    clip_grad_norm: float = 0.0
+    remove_gradient_parallel_to_decoder_directions: bool = False
 
     finetuning: bool = False
 
