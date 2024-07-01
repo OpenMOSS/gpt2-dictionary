@@ -60,3 +60,8 @@ exclude=[".venv/", "examples", "TransformerLens", "tests", "exp"]
 ignore_missing_imports=true
 allow_redefinition=true
 implicit_optional=true
+
+[build-system]
+requires = ["pdm-pep517"]
+build-backend = "pdm.pep517.api"
+

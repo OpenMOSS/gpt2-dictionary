@@ -69,6 +69,7 @@ class RunnerConfig(BaseConfig):
 class LanguageModelConfig(BaseModelConfig):
     model_name: str = "gpt2"
     model_from_pretrained_path: Optional[str] = None
+    use_flash_attn: bool = False
     cache_dir: Optional[str] = None
     d_model: int = 768
     local_files_only: bool = False

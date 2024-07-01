@@ -1224,6 +1224,7 @@ def get_pretrained_model_config(
     checkpoint_index: Optional[int] = None,
     checkpoint_value: Optional[int] = None,
     fold_ln: bool = False,
+    use_flash_attn: bool = False,
     device: Optional[Union[str, torch.device]] = None,
     n_devices: int = 1,
     default_prepend_bos: bool = True,
@@ -1251,6 +1252,8 @@ def get_pretrained_model_config(
         fold_ln (bool, optional): Whether to fold the layer norm into the
             subsequent linear layers (see HookedTransformer.fold_layer_norm for
             details). Defaults to False.
+        use_flash_attn (bool): whether to use FlashAttention-2. Please refer to
+            https://github.com/Dao-AILab/flash-attention. Defaults to False.
         device (str, optional): The device to load the model onto. By
             default will load to CUDA if available, else CPU.
         n_devices (int, optional): The number of devices to split the model across. Defaults to 1.
@@ -1310,6 +1313,8 @@ def get_pretrained_model_config(
             cfg_dict["normalization_type"] = "RMSPre"
         else:
             logging.warning("Cannot fold in layer norm, normalization_type is not LN.")
+    if use_flash_attn:
+        cfg_dict["use_flash_attn"] = True
 
     if checkpoint_index is not None or checkpoint_value is not None:
         checkpoint_labels, checkpoint_label_type = get_checkpoint_labels(

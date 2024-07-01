@@ -73,6 +73,8 @@ class HookedTransformerConfig:
             custom config, if loading from pretrained then this is not needed.
         use_local_attn (bool): whether to use local attention - ie each
             destination token can only attend to source tokens a certain distance back.
+        use_flash_attn (bool): whether to use FlashAttention-2. Please refer to
+            https://github.com/Dao-AILab/flash-attention.
         window_size (int, *optional*): the size of the window for local
             attention
         attn_types (List[str], *optional*): the types of attention to use for
@@ -177,6 +179,7 @@ class HookedTransformerConfig:
     use_hook_mlp_in: bool = False
     use_attn_in: bool = False
     use_local_attn: bool = False
+    use_flash_attn: bool = False
     original_architecture: Optional[str] = None
     from_checkpoint: bool = False
     checkpoint_index: Optional[int] = None
